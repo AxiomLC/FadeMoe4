@@ -26,15 +26,25 @@
         <div id="dbview2-container"></div>
         -->
     
-
         <!-- Main Content Area -->
         <div class="main-content">
             <!-- Database View (default) -->
             <div id="db-view-container" class="content-section active"></div>
 
             <!-- Alert Cards View (hidden by default) -->
-            <div id="alert-view-container" class="content-section hidden"></div>
+            <div id="alert-view-container" class="content-section hidden">
+                <div style="color: #bbb; font-size: 1.5rem; text-align: center; margin-top: 50px;">Alert Cards - Coming Soon</div>
+            </div>
         </div>
+
+        <!-- Modal for Schema Display -->
+        <div id="schemaModal" class="modal hidden">
+            <div class="modal-content">
+                <span id="modalCloseBtn" class="modal-close">&times;</span>
+                <div id="modalSchemaContent">Loading schema...</div>
+            </div>
+        </div>
+
     </div>
 
     <!-- <script src="js/dbview2.js"></script> -->

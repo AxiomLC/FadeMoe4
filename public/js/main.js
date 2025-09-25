@@ -6,10 +6,44 @@ let totalRecords = 0;
 
 document.addEventListener('DOMContentLoaded', () => {
     loadComponents();
-    setupEventListeners();
     loadSystemStatus();
     setInterval(loadSystemStatus, 30000);
+
+    const modal = document.getElementById('schemaModal');
+    const closeBtn = document.getElementById('modalCloseBtn');
+    const testOpenBtn = document.getElementById('testOpenModalBtn');
+
+    if (modal && closeBtn) {
+        closeBtn.addEventListener('click', () => {
+            console.log('Modal close button clicked');
+            modal.classList.add('hidden');
 });
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) {
+                console.log('Modal background clicked');
+                modal.classList.add('hidden');
+    }
+        });
+    }
+
+    loadThreeButtons();
+});
+async function loadSystemStatus() {
+    const statusBox = document.getElementById('statusBox');
+    if (!statusBox) return;
+
+    try {
+        const response = await fetch('/api/system-summary');
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const data = await response.json();
+        if (data.statusText) {
+            statusBox.innerHTML = data.statusText;
+        }
+    } catch (error) {
+        console.error('Failed to load system status:', error);
+        if (statusBox) statusBox.innerHTML = '<div class="error">Failed to load system status</div>';
+    }
+}
 
 async function loadComponents() {
     try {
@@ -17,17 +51,16 @@ async function loadComponents() {
         const controlsHtml = await controlsResponse.text();
         document.getElementById('controls-container').innerHTML = controlsHtml;
 
-        // Load dbviewcontrol.html into its container
+        setupEventListeners();
+
         const dbviewControlResponse = await fetch('components/dbviewcontrol.html');
         const dbviewControlHtml = await dbviewControlResponse.text();
         document.getElementById('dbviewcontrol-container').innerHTML = dbviewControlHtml;
 
-        // Initialize dropdown and select button event
-        initDbviewControl();
+        initDbviewControlListeners();
     } catch (error) {
         console.error('Failed to load controls or dbviewcontrol:', error);
     }
-
     try {
         const statusResponse = await fetch('components/statusbox.html');
         const statusHtml = await statusResponse.text();
@@ -35,7 +68,6 @@ async function loadComponents() {
     } catch (error) {
         console.error('Failed to load status box:', error);
     }
-
     try {
         const dbViewResponse = await fetch('components/dbview.html');
         const dbViewHtml = await dbViewResponse.text();
@@ -56,11 +88,41 @@ async function loadComponents() {
 function setupEventListeners() {
     const viewDbBtn = document.getElementById('view-db-btn');
     const viewAlertsBtn = document.getElementById('view-alerts-btn');
-
     if (viewDbBtn && viewAlertsBtn) {
         viewDbBtn.addEventListener('click', () => switchView('db'));
         viewAlertsBtn.addEventListener('click', () => switchView('alerts'));
     }
+}
+
+function initDbviewControlListeners() {
+    const perpspecDropdown = document.getElementById('perpspecDropdown');
+    const selectBtn = document.getElementById('selectPerpspecBtn');
+    const viewSchemaBtn = document.getElementById('viewSchemaBtn');
+
+    if (!perpspecDropdown || !selectBtn || !viewSchemaBtn) {
+        console.warn('DB view control buttons or dropdown not found');
+        return;
+    }
+
+    loadPerpspecsDbviewControl();
+
+    selectBtn.addEventListener('click', () => {
+        const selected = perpspecDropdown.value;
+        if (!selected) {
+            alert('Please select a Perpspec');
+            return;
+        }
+        fetchAndDisplayDataDbviewControl(selected);
+    });
+
+    viewSchemaBtn.addEventListener('click', async () => {
+        const selected = perpspecDropdown.value;
+        if (!selected) {
+            alert('Please select a Perpspec');
+            return;
+        }
+        await fetchAndDisplaySchema(selected);
+    });
 }
 
 function switchView(view) {
@@ -84,8 +146,6 @@ function switchView(view) {
         alertViewContainer.classList.toggle('hidden', view !== 'alerts');
     }
 }
-
-// --- dbviewcontrol logic ---
 
 function initDbviewControl() {
     const perpspecDropdown = document.getElementById('perpspecDropdown');
@@ -174,3 +234,77 @@ async function fetchAndDisplayDataDbviewControl(perpspec) {
         container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
     }
 }
+
+async function fetchAndDisplaySchema(perpspec) {
+    const modal = document.getElementById('schemaModal');
+    const modalContent = document.getElementById('modalSchemaContent');
+    if (!modal || !modalContent) {
+        console.error('Schema modal elements not found');
+        return;
+    }
+
+    modalContent.innerHTML = '<div class="loading">Loading schema...</div>';
+    try {
+        const response = await fetch('/api/schema/perp_data');
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const columns = await response.json();
+
+        if (!columns || columns.length === 0) {
+            modalContent.innerHTML = '<div>No schema columns found.</div>';
+            return;
+        }
+
+        let html = '<strong>Detailed Schema for perp_data Table:</strong>';
+        html += '<table><thead><tr><th>Column Name</th><th>Data Type</th><th>Nullable</th><th>Default</th></tr></thead><tbody>';
+
+        columns.forEach(col => {
+            html += `<tr><td>${col.column_name}</td><td>${col.data_type}</td><td>${col.is_nullable}</td><td>${col.column_default || ''}</td></tr>`;
+        });
+
+        html += '</tbody></table>';
+
+        modalContent.innerHTML = html;
+        modal.classList.remove('hidden');
+        console.log('Detailed schema modal displayed');
+    } catch (error) {
+        console.error('Error fetching detailed schema:', error);
+        modalContent.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+    }
+}
+
+function toggleButton(btn, onText, offText) {
+    btn.addEventListener('click', () => {
+        if (btn.classList.contains('on')) {
+            btn.classList.remove('on');
+            btn.classList.add('off');
+            btn.textContent = offText;
+        } else {
+            btn.classList.remove('off');
+            btn.classList.add('on');
+            btn.textContent = onText;
+        }
+    });
+}
+
+function attachToggleButtonsListeners() {
+    const btnApis = document.getElementById('btnApis');
+    const btnTrader = document.getElementById('btnTrader');
+    const btnBacktester = document.getElementById('btnBacktester');
+
+    if (btnApis) toggleButton(btnApis, 'APIs Pull On', 'APIs Pull Off');
+    if (btnTrader) toggleButton(btnTrader, 'Core Trader On', 'Core Trader Off');
+    if (btnBacktester) toggleButton(btnBacktester, 'Backtester On', 'Backtester Off');
+}
+
+async function loadThreeButtons() {
+    try {
+        const response = await fetch('components/3buttons.html');
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const html = await response.text();
+        document.getElementById('three-buttons-container').innerHTML = html;
+        attachToggleButtonsListeners();
+    } catch (error) {
+        console.error('Failed to load 3buttons.html:', error);
+    }
+}
+

@@ -1,0 +1,28 @@
+<div class="controls">
+  <button id="btnApis" class="toggle-btn on">APIs Pull On</button>
+  <button id="btnTrader" class="toggle-btn off">Core Trader Off</button>
+  <button id="btnBacktester" class="toggle-btn off">Backtester Off</button>
+</div>
+
+<script>
+  function toggleButton(btn, onText, offText) {
+    btn.addEventListener('click', () => {
+      if (btn.classList.contains('on')) {
+        btn.classList.remove('on');
+        btn.classList.add('off');
+        btn.textContent = offText;
+      } else {
+        btn.classList.remove('off');
+        btn.classList.add('on');
+        btn.textContent = onText;
+      }
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    toggleButton(document.getElementById('btnApis'), 'APIs Pull On', 'APIs Pull Off');
+    toggleButton(document.getElementById('btnTrader'), 'Core Trader On', 'Core Trader Off');
+    toggleButton(document.getElementById('btnBacktester'), 'Backtester On', 'Backtester Off');
+  });
+</script>
+

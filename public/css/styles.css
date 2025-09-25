@@ -104,15 +104,88 @@ button.active.glow-pink {
     box-shadow: 0 0 15px rgba(212, 121, 255, 0.6);
 }
 
-/* Toggle button glows */
-button.toggle.on.glow-green {
-    background: linear-gradient(135deg, #28a745, #3cb371);
-    box-shadow: 0 0 15px rgba(40, 167, 69, 0.6);
+/* Toggle buttons on/off states with green/red haze backgrounds */
+.toggle-btn {
+    padding: 12px 25px;
+    font-size: 16px;
+    font-weight: 600;
+    border: none;
+    border-radius: 8px;
+    color: white;
+    cursor: pointer;
+    margin: 5px;
+    min-width: 150px;
+    transition: all 0.3s ease;
 }
 
-button.toggle.off.glow-red {
+.toggle-btn.on {
+    background: linear-gradient(135deg, #28a745, #3cb371);
+    box-shadow: 0 0 20px 10px rgba(40, 167, 69, 0.4);
+}
+
+.toggle-btn.off {
     background: linear-gradient(135deg, #dc3545, #e54d5c);
-    box-shadow: 0 0 15px rgba(220, 53, 69, 0.6);
+    box-shadow: 0 0 20px 10px rgba(220, 53, 69, 0.4);
+}
+
+button.toggle {
+    position: relative;
+    padding: 12px 25px;
+    min-width: 140px;
+    font-size: 16px;
+    font-weight: 600;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    opacity: 0.6;
+}
+
+button.toggle:hover {
+    opacity: 0.85;
+}
+
+button.toggle:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+
+/* Add bigger white background haze for active toggle buttons */
+.control-btn {
+    position: relative;
+    z-index: 0;
+    transition: all 0.3s ease;
+    padding: 12px 25px;
+    min-width: 140px;
+    font-size: 16px;
+    font-weight: 600;
+    background: linear-gradient(135deg, #9f59ff, #c469ff);
+    cursor: pointer;
+    border-radius: 8px;
+    border: none;
+    color: #e0e0e0;
+}
+
+.control-btn:hover {
+    background: linear-gradient(135deg, #b569ff, #d479ff);
+    box-shadow: 0 0 15px rgba(159, 89, 255, 0.4);
+}
+
+.control-btn.active {
+    z-index: 1;
+    box-shadow: 0 0 20px 10px rgba(255, 255, 255, 0.3);
+}
+
+.control-btn.active::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: -6px;
+    right: -6px;
+    bottom: -6px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    z-index: -1;
+    filter: blur(8px);
 }
 
 .status-box {
@@ -218,3 +291,63 @@ tr:hover {
     color: #9f59ff;
     margin-top: 0;
 }
+
+/* Modal styles */
+.modal {
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0, 0, 0, 0.7);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.modal.hidden {
+    display: none;
+}
+
+.modal-content {
+    background-color: #1e1e2e;
+    padding: 20px;
+    border-radius: 10px;
+    width: 80%;
+    max-width: 700px;
+    color: #e0e0e0;
+    box-shadow: 0 0 25px rgba(159, 89, 255, 0.7);
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.modal-close {
+    color: #9f59ff;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.modal-close:hover {
+    color: #c469ff;
+}
+
+.modal-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+
+.modal-content th, .modal-content td {
+    border: 1px solid rgba(159, 89, 255, 0.3);
+    padding: 8px;
+    text-align: left;
+}
+
+.modal-content th {
+    background-color: rgba(159, 89, 255, 0.2);
+}
+
