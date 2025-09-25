@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FadeMoe4 - Database Viewer</title>
+    <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+    <div id="app">
+        <!-- Header with glowing title and status box -->
+        <div class="header-container">
+            <div class="header-left">
+                <!-- LOGO COMMENT: Insert logo image here -->
+                <!-- <img src="path/to/your/logo.png" alt="FadeMoe Logo" class="logo-img" /> -->
+                <h1 class="glowing-title">🎯 FadeMoe4</h1>
+                <p>Real-time cryptocurrency data monitoring system</p>
+            </div>
+            <div id="status-box-container" class="header-right"></div>
+        </div>
+
+        <!-- Control Buttons -->
+        <div id="controls-container"></div>
+
+        <!--
+        <div id="dbview2-container"></div>
+        -->
+    
+
+        <!-- Main Content Area -->
+        <div class="main-content">
+            <!-- Database View (default) -->
+            <div id="db-view-container" class="content-section active"></div>
+
+            <!-- Alert Cards View (hidden by default) -->
+            <div id="alert-view-container" class="content-section hidden"></div>
+        </div>
+    </div>
+
+    <!-- <script src="js/dbview2.js"></script> -->
+    <script src="js/uifunctions.js"></script>
+    <script src="js/main.js"></script>
+
+</body>
+</html>
