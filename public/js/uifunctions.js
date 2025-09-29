@@ -1,5 +1,13 @@
-// UI Utility Functions
+/**
+ * UI Utility Functions for FadeMoe4 frontend.
+ * Includes status updates, error display, table rendering, pagination,
+ * and HTML escaping to prevent XSS.
+ */
 
+/**
+ * Update status bar message with current time.
+ * @param {string} message
+ */
 function updateStatus(message) {
     const statusBar = document.getElementById('statusBar');
     if (statusBar) {
@@ -7,6 +15,10 @@ function updateStatus(message) {
     }
 }
 
+/**
+ * Display an error message in the main table area.
+ * @param {string} message
+ */
 function showError(message) {
     const tableContent = document.getElementById('tableContent');
     if (tableContent) {
@@ -15,6 +27,11 @@ function showError(message) {
     }
 }
 
+/**
+ * Render data as an HTML table.
+ * @param {Array} data - Array of data objects.
+ * @param {Array|null} fields - Optional array of fields to display.
+ */
 function displayTableData(data, fields = null) {
     const tableContent = document.getElementById('tableContent');
 
@@ -57,6 +74,12 @@ function displayTableData(data, fields = null) {
     tableContent.innerHTML = html;
 }
 
+/**
+ * Update pagination controls based on total records and current page.
+ * @param {number} totalRecords
+ * @param {number} currentOffset
+ * @param {number} currentLimit
+ */
 function updatePagination(totalRecords, currentOffset, currentLimit) {
     const pagination = document.getElementById('pagination');
     const pageInfo = document.getElementById('pageInfo');
@@ -76,7 +99,11 @@ function updatePagination(totalRecords, currentOffset, currentLimit) {
     }
 }
 
-// Helper to escape HTML characters to prevent XSS
+/**
+ * Escape HTML special characters to prevent XSS attacks.
+ * @param {string} unsafe
+ * @returns {string}
+ */
 function escapeHtml(unsafe) {
     if (typeof unsafe !== 'string') return unsafe;
     return unsafe

@@ -1,3 +1,97 @@
+28 Sep UPDATE ***
+
+---
+## Technical Overview of Backfill System
+
+This project implements a robust OHLCV backfill system for multiple cryptocurrency derivatives exchanges, including Binance (USDT-margined futures), Bybit, and OKX. The architecture departs from relying solely on the CCXT library for data fetching by directly interfacing with the official REST APIs of OKX and Bybit to overcome their specific API limitations and rate limits. The backfill logic is modularized into separate scripts under the `apis/` directory:
+
+- `okx-ohlcv-h.js` implements OKX backfill using the `/market/history-candles` endpoint with strict pagination via the `after` timestamp parameter, fetching 10 days of 1-minute candles in batches of 100, with concurrency controlled by `p-limit` and rate limiting delays to respect API constraints.
+
+- `byb-ohlcv-h.js` handles Bybit backfill through the official v5 market kline API, paginating with the `end` timestamp parameter and batch sizes up to 1000 candles, similarly employing concurrency and delay controls.
+
+- `bin-ohlcv-h.js` manages Binance USDT-margined futures backfill via Binance’s REST API, paginating with `startTime` and supporting larger batch sizes (up to 1500 candles), aligned with Binance’s higher rate limits.
+
+The symbol management flow is centralized in `g-symbols.js`, which generates a `dynamic-symbols.json` mapping base symbols to exchange-specific symbol formats, eliminating the need for runtime symbol translation. This mapping is consistently used across all backfill scripts to ensure correct API requests and uniform base symbol referencing in the database.
+
+Data processing includes converting raw candle arrays to structured objects with fields: timestamp (`ts`) converted to `BigInt` milliseconds via `apiUtils.toMillis`, open, high, low, close, and volume as floats, and metadata fields `symbol` (base symbol), `source`, and `perpspec` to track data origin and schema. The insertion layer updates the database schema dynamically to accommodate all required columns and performs upserts keyed on timestamp, symbol, and source to maintain data integrity.
+
+Additionally, a separate WebSocket listener module (`web-ohlcv-c.js`) complements the backfill by ingesting live candle updates from all three exchanges, using the same symbol mapping and data processing conventions to keep the database current.
+
+This design balances direct API control with modular, reusable utilities and concurrency management, enabling efficient, reliable historical data backfill and live data streaming for multi-exchange derivatives market data.
+
+---
+
+
+27 Sep Upddate
+# FadeMoe4 Crypto Perpetuals Data Platform
+
+## Overview
+
+FadeMoe4 is a modular crypto perpetuals data ingestion and analytics platform designed for efficient backtesting and live trading signal generation. It supports multi-exchange OHLCV and perpetual analytics data, unified under a flexible yet performant database schema with robust logging and error handling.
+
+---
+
+## Architecture Summary
+
+```
+dbsetup.js
+   ↓
+Creates unified 'perp_data' table with static columns:
+(ts BIGINT, symbol TEXT, source TEXT, interval TEXT, o, h, l, c, v NUMERIC)
+   ↓
+Creates 'perpspec_schema' metadata table (perpspec_name, fields JSONB)
+   ↓
+Registers fixed perpspecs (e.g., bin-w-ohlcv, byb-w-ohlcv, okx-w-ohlcv)
+   ↓
+Master API
+   ├─ Runs all '-h.js' (history/backfill) scripts sequentially
+   └─ Runs all '-c.js' (current/live) scripts on intervals or websockets
+        ├─ Websocket '-c.js' scripts ingest real-time OHLCV into static columns of 'perp_data'
+        └─ Other analytics '-h.js' and '-c.js' scripts dynamically create columns and update 'perpspec_schema'
+   ↓
+Unified data storage in 'perp_data' keyed by (ts, symbol, source)
+   ↓
+API Server exposes endpoints:
+   ├─ /api/perpspecs → lists all perpspec schemas and fields (feeds UI dropdowns)
+   ├─ /api/data/:perpspec → paginated data query by perpspec (for UI data tables)
+   ├─ /api/schema/:tableName → detailed DB schema info (for UI schema viewer)
+   ├─ /api/system-summary → recent status and error logs (for UI status dashboard)
+   └─ /health → health check endpoint
+```
+
+---
+
+## Key Features
+
+- **Unified Time-Series DB**:  
+  Uses TimescaleDB hypertable on `perp_data.ts` storing all data with timestamps as BigInt milliseconds UTC, enabling precise cross-exchange and cross-metric correlation.
+
+- **Static OHLCV Columns**:  
+  OHLCV data from Binance, Bybit, OKX websockets and backfills are stored in static columns (`o`, `h`, `l`, `c`, `v`) under distinct `source` identifiers (perpspec_name).
+
+- **Dynamic Analytics Schema**:  
+  Other perpetual analytics (funding rates, open interest, social metrics, etc.) use dynamic column creation and schema registration via `perpspec_schema` and helper functions, allowing flexible evolution without downtime.
+
+- **Master API Orchestration**:  
+  Discovers and runs all history (`-h.js`) scripts sequentially for backfill, then starts live (`-c.js`) scripts for real-time data ingestion, maintaining modularity and extensibility.
+
+- **Robust Logging and Error Handling**:  
+  Centralized logging of script status, errors, and detailed messages stored in dedicated tables (`perp_status`, `perp_errors`), accessible via API for UI monitoring.
+
+- **Symbol Translation and Timestamp Normalization**:  
+  All scripts use a shared `dynamic-symbols.json` for symbol mapping and a universal timestamp normalization utility converting all timestamps to BigInt milliseconds UTC.
+
+- **API Endpoints for UI**:  
+  Serve perpspec metadata, paginated data, schema details, and system status for a responsive and informative frontend experience.
+
+- **Future-Ready**:  
+  Designed to support upcoming backtester and live trading modules leveraging the unified data and schema infrastructure.
+
+---
+
+This architecture ensures consistency, scalability, and maintainability, providing a solid foundation for advanced crypto perpetuals analytics and trading signal generation.
+
+
 25 Sep Summary 
 
 ### Current Project Status

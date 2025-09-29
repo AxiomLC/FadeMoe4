@@ -1,3 +1,9 @@
+/**
+ * Main JavaScript for FadeMoe4 UI.
+ * Handles loading UI components, system status, perpspec dropdown,
+ * schema display, and view toggling.
+ */
+
 let currentView = 'db';
 let currentPerpspec = '';
 let currentOffset = 0;
@@ -7,27 +13,27 @@ let totalRecords = 0;
 document.addEventListener('DOMContentLoaded', () => {
     loadComponents();
     loadSystemStatus();
-    setInterval(loadSystemStatus, 30000);
+    setInterval(loadSystemStatus, 4000);
 
     const modal = document.getElementById('schemaModal');
     const closeBtn = document.getElementById('modalCloseBtn');
-    const testOpenBtn = document.getElementById('testOpenModalBtn');
-
     if (modal && closeBtn) {
         closeBtn.addEventListener('click', () => {
-            console.log('Modal close button clicked');
             modal.classList.add('hidden');
-});
+        });
         modal.addEventListener('click', (event) => {
             if (event.target === modal) {
-                console.log('Modal background clicked');
                 modal.classList.add('hidden');
-    }
+            }
         });
     }
 
     loadThreeButtons();
 });
+
+/**
+ * Load and update system status box from API.
+ */
 async function loadSystemStatus() {
     const statusBox = document.getElementById('statusBox');
     if (!statusBox) return;
@@ -45,18 +51,19 @@ async function loadSystemStatus() {
     }
 }
 
+/**
+ * Load UI components HTML fragments and initialize event listeners.
+ */
 async function loadComponents() {
     try {
         const controlsResponse = await fetch('components/controls.html');
         const controlsHtml = await controlsResponse.text();
         document.getElementById('controls-container').innerHTML = controlsHtml;
-
         setupEventListeners();
 
         const dbviewControlResponse = await fetch('components/dbviewcontrol.html');
         const dbviewControlHtml = await dbviewControlResponse.text();
         document.getElementById('dbviewcontrol-container').innerHTML = dbviewControlHtml;
-
         initDbviewControlListeners();
     } catch (error) {
         console.error('Failed to load controls or dbviewcontrol:', error);
@@ -85,6 +92,9 @@ async function loadComponents() {
     }
 }
 
+/**
+ * Setup event listeners for view toggle buttons.
+ */
 function setupEventListeners() {
     const viewDbBtn = document.getElementById('view-db-btn');
     const viewAlertsBtn = document.getElementById('view-alerts-btn');
@@ -94,6 +104,9 @@ function setupEventListeners() {
     }
 }
 
+/**
+ * Initialize listeners for DB view controls (dropdown, buttons).
+ */
 function initDbviewControlListeners() {
     const perpspecDropdown = document.getElementById('perpspecDropdown');
     const selectBtn = document.getElementById('selectPerpspecBtn');
@@ -121,10 +134,14 @@ function initDbviewControlListeners() {
             alert('Please select a Perpspec');
             return;
         }
-        await fetchAndDisplaySchema(selected);
+        await fetchAndDisplaySchemaFields(selected);
     });
 }
 
+/**
+ * Switch between DB view and Alerts view.
+ * @param {string} view - 'db' or 'alerts'
+ */
 function switchView(view) {
     currentView = view;
 
@@ -147,24 +164,9 @@ function switchView(view) {
     }
 }
 
-function initDbviewControl() {
-    const perpspecDropdown = document.getElementById('perpspecDropdown');
-    const selectBtn = document.getElementById('selectPerpspecBtn');
-
-    if (!perpspecDropdown || !selectBtn) return;
-
-    loadPerpspecsDbviewControl();
-
-    selectBtn.addEventListener('click', () => {
-        const selected = perpspecDropdown.value;
-        if (!selected) {
-            alert('Please select a Perpspec');
-            return;
-        }
-        fetchAndDisplayDataDbviewControl(selected);
-    });
-}
-
+/**
+ * Load perpspecs from API and populate dropdown.
+ */
 async function loadPerpspecsDbviewControl() {
     const dropdown = document.getElementById('perpspecDropdown');
     dropdown.innerHTML = '<option value="">Loading Perpspecs...</option>';
@@ -185,6 +187,39 @@ async function loadPerpspecsDbviewControl() {
     }
 }
 
+/**
+ * Fetch and display schema fields for selected perpspec.
+ * @param {string} perpspec
+ */
+async function fetchAndDisplaySchemaFields(perpspec) {
+    const container = document.getElementById('db-view-container');
+    container.innerHTML = '<div class="loading">Loading schema fields...</div>';
+
+    try {
+        const response = await fetch('/api/perpspecs');
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const perpspecs = await response.json();
+        const schema = perpspecs.find(ps => ps.perpspec_name === perpspec);
+        if (!schema) throw new Error(`Schema for ${perpspec} not found`);
+
+        const fields = schema.fields;
+        let html = `<h3>Schema Fields for ${perpspec.toUpperCase()}</h3><ul>`;
+        fields.forEach(field => {
+            html += `<li>${field}</li>`;
+        });
+        html += '</ul>';
+
+        container.innerHTML = html;
+    } catch (error) {
+        console.error('Error fetching/displaying schema fields:', error);
+        container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+    }
+}
+
+/**
+ * Fetch and display data for selected perpspec.
+ * @param {string} perpspec
+ */
 async function fetchAndDisplayDataDbviewControl(perpspec) {
     const container = document.getElementById('db-view-container');
     container.innerHTML = '<div class="loading">Loading data...</div>';
@@ -196,7 +231,8 @@ async function fetchAndDisplayDataDbviewControl(perpspec) {
         const schema = perpspecs.find(ps => ps.perpspec_name === perpspec);
         if (!schema) throw new Error(`Schema for ${perpspec} not found`);
 
-        const fields = schema.fields;
+        // Filter out 'perpspec' from fields to display
+        const fields = schema.fields.filter(f => f !== 'perpspec');
 
         const dataResponse = await fetch(`/api/data/${perpspec}?limit=100&offset=0`);
         if (!dataResponse.ok) throw new Error(`HTTP error! status: ${dataResponse.status}`);
@@ -207,9 +243,12 @@ async function fetchAndDisplayDataDbviewControl(perpspec) {
             return;
         }
 
-        let html = '<table><thead><tr>';
         const coreColumns = ['ts', 'symbol', 'source', 'interval'];
-        const allColumns = [...new Set([...coreColumns, ...fields])];
+        // Exclude 'perpspec' from core columns as well if present
+        const filteredCoreColumns = coreColumns.filter(c => c !== 'perpspec');
+        const allColumns = [...new Set([...filteredCoreColumns, ...fields])];
+
+        let html = '<table><thead><tr>';
         allColumns.forEach(col => {
             html += `<th>${col}</th>`;
         });
@@ -220,7 +259,7 @@ async function fetchAndDisplayDataDbviewControl(perpspec) {
             allColumns.forEach(col => {
                 let val = row[col];
                 if (val === null || val === undefined) val = '<em>null</em>';
-                else if (col === 'ts') val = new Date(val).toLocaleString();
+                else if (col === 'ts') val = formatTimestampForUI(val);
                 else val = val.toString();
                 html += `<td>${val}</td>`;
             });
@@ -229,82 +268,33 @@ async function fetchAndDisplayDataDbviewControl(perpspec) {
 
         html += '</tbody></table>';
         container.innerHTML = html;
+
     } catch (error) {
         console.error('Error fetching/displaying data:', error);
         container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
     }
 }
 
-async function fetchAndDisplaySchema(perpspec) {
-    const modal = document.getElementById('schemaModal');
-    const modalContent = document.getElementById('modalSchemaContent');
-    if (!modal || !modalContent) {
-        console.error('Schema modal elements not found');
-        return;
-    }
-
-    modalContent.innerHTML = '<div class="loading">Loading schema...</div>';
-    try {
-        const response = await fetch('/api/schema/perp_data');
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        const columns = await response.json();
-
-        if (!columns || columns.length === 0) {
-            modalContent.innerHTML = '<div>No schema columns found.</div>';
-            return;
-        }
-
-        let html = '<strong>Detailed Schema for perp_data Table:</strong>';
-        html += '<table><thead><tr><th>Column Name</th><th>Data Type</th><th>Nullable</th><th>Default</th></tr></thead><tbody>';
-
-        columns.forEach(col => {
-            html += `<tr><td>${col.column_name}</td><td>${col.data_type}</td><td>${col.is_nullable}</td><td>${col.column_default || ''}</td></tr>`;
-        });
-
-        html += '</tbody></table>';
-
-        modalContent.innerHTML = html;
-        modal.classList.remove('hidden');
-        console.log('Detailed schema modal displayed');
-    } catch (error) {
-        console.error('Error fetching detailed schema:', error);
-        modalContent.innerHTML = `<div class="error">Error: ${error.message}</div>`;
-    }
+/**
+ * Placeholder for loading additional UI buttons if needed.
+ */
+function loadThreeButtons() {
+    // Implement if needed
 }
 
-function toggleButton(btn, onText, offText) {
-    btn.addEventListener('click', () => {
-        if (btn.classList.contains('on')) {
-            btn.classList.remove('on');
-            btn.classList.add('off');
-            btn.textContent = offText;
-        } else {
-            btn.classList.remove('off');
-            btn.classList.add('on');
-            btn.textContent = onText;
-        }
-    });
-}
-
-function attachToggleButtonsListeners() {
-    const btnApis = document.getElementById('btnApis');
-    const btnTrader = document.getElementById('btnTrader');
-    const btnBacktester = document.getElementById('btnBacktester');
-
-    if (btnApis) toggleButton(btnApis, 'APIs Pull On', 'APIs Pull Off');
-    if (btnTrader) toggleButton(btnTrader, 'Core Trader On', 'Core Trader Off');
-    if (btnBacktester) toggleButton(btnBacktester, 'Backtester On', 'Backtester Off');
-}
-
-async function loadThreeButtons() {
-    try {
-        const response = await fetch('components/3buttons.html');
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        const html = await response.text();
-        document.getElementById('three-buttons-container').innerHTML = html;
-        attachToggleButtonsListeners();
-    } catch (error) {
-        console.error('Failed to load 3buttons.html:', error);
-    }
+/**
+ * Format timestamp for display.
+ * @param {number|string|bigint} timestamp
+ * @returns {string}
+ */
+function formatTimestampForUI(ts) {
+    const date = new Date(Number(ts));
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const year = date.getUTCFullYear();
+    const hours = String(date.getUTCHours()).padStart(2, '0');
+    const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+    const seconds = String(date.getUTCSeconds()).padStart(2, '0');
+    return `${day}/${month}/${year} ${hours}:${minutes}:${seconds} UTC`;
 }
 

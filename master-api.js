@@ -1,4 +1,3 @@
-// master-api.js
 const fs = require('fs');
 const path = require('path');
 
@@ -40,14 +39,12 @@ class MasterAPI {
     }
 
     determineScriptType(filename) {
-        // Parse filename to determine script type
         const parts = filename.replace('.js', '').split('-');
         if (parts.length < 3) return 'unknown';
         
-        const source = parts[0];  // c, b, ccxt, etc.
-        const metric = parts[1];  // oi, fr, ohlcv, etc.
-        const mode = parts[2];    // h (history), c (current)
-        
+        const source = parts[0];
+        const metric = parts[1];
+        const mode = parts[2];
         return {
             source: source,
             metric: metric,
@@ -72,7 +69,6 @@ class MasterAPI {
                 console.log(`\n🚀 Executing ${script.name}...`);
                 const scriptModule = require(script.path);
                 
-                // UNIVERSAL SCRIPT EXECUTION - Try standard function names
                 if (typeof scriptModule.execute === 'function') {
                     await scriptModule.execute();
                 } else if (typeof scriptModule.fetchData === 'function') {
@@ -80,18 +76,15 @@ class MasterAPI {
                 } else if (typeof scriptModule.backfill === 'function') {
                     await scriptModule.backfill();
                 } else {
-                    // Direct execution for self-contained scripts
                     await require(script.path);
                 }
                 
                 console.log(`✅ Completed ${script.name}`);
                 
-                // Rate limiting between scripts
                 await new Promise(resolve => setTimeout(resolve, 2000));
                 
             } catch (error) {
                 console.error(`❌ Error in ${script.name}:`, error.message);
-                // Continue with other scripts
             }
         }
         
@@ -111,16 +104,14 @@ class MasterAPI {
         
         currentScripts.forEach(script => {
             try {
-                const interval = 60000; // 1 minute default
+                const interval = 60000;
                 console.log(`🚀 Starting ${script.name} with ${interval/1000}s interval`);
                 
-                // Set up recurring execution
                 this.intervals[script.name] = setInterval(async () => {
                     try {
                         console.log(`📈 Running ${script.name}...`);
                         const scriptModule = require(script.path);
                         
-                        // UNIVERSAL SCRIPT EXECUTION - Try standard function names
                         if (typeof scriptModule.execute === 'function') {
                             await scriptModule.execute();
                         } else if (typeof scriptModule.collectLive === 'function') {
@@ -128,7 +119,6 @@ class MasterAPI {
                         } else if (typeof scriptModule.run === 'function') {
                             await scriptModule.run();
                         } else {
-                            // Direct execution for self-contained scripts
                             await require(script.path);
                         }
                         
@@ -163,12 +153,9 @@ class MasterAPI {
     async start() {
         await this.initialize();
         
-        // Run backfill first
         await this.runBackfill();
         
-        // Then start live mode
         this.startLiveMode();
-        
         console.log('\n🎯 Master API Fully Operational!');
         console.log('📊 Backfill completed, live data collection active');
     }
@@ -180,11 +167,9 @@ class MasterAPI {
     }
 }
 
-// Self-invoking
 if (require.main === module) {
     const master = new MasterAPI();
     
-    // Handle graceful shutdown
     process.on('SIGINT', async () => {
         console.log('\n⚠️ Shutdown signal received...');
         await master.stop();

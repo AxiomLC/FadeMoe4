@@ -2,6 +2,17 @@ const { Pool } = require('pg');
 const format = require('pg-format');
 require('dotenv').config();
 
+/**
+ * DatabaseManager handles all database setup, schema management,
+ * and data insertion for the FadeMoe4 platform.
+ * 
+ * Core tables:
+ * - perp_data: unified time-series table keyed by (ts, symbol, source)
+ * - perpspec_schema: metadata describing dynamic schema fields per perpspec
+ * - perp_status, perp_errors: logging and error tracking
+ * 
+ * Uses TimescaleDB hypertables for efficient time-series data storage.
+ */
 class DatabaseManager {
     constructor() {
         this.pool = new Pool({
@@ -13,18 +24,22 @@ class DatabaseManager {
         });
     }
 
-    // ------------------------------------------------------------------------
-    //  CORE DATABASE INITIALIZATION (RUN ONCE)
-    // ------------------------------------------------------------------------
-
+    /**
+     * Initialize the database by dropping existing tables,
+     * enabling extensions, creating core tables, and inserting fixed schemas.
+     */
     async initialize() {
         console.log('⚙️ Setting up database...');
         await this.dropExistingTables();
         await this.enableExtensions();
         await this.createCoreTables();
+        await this.insertFixedPerpspecSchemas();
         console.log('✅ Database setup complete. Success.');
     }
 
+    /**
+     * Drop existing tables to reset the database schema.
+     */
     async dropExistingTables() {
         const tablesToDrop = ['perp_data', 'perp_status', 'perp_errors', 'perpspec_schema'];
         for (const table of tablesToDrop) {
@@ -37,6 +52,9 @@ class DatabaseManager {
         }
     }
 
+    /**
+     * Enable required PostgreSQL extensions, such as TimescaleDB.
+     */
     async enableExtensions() {
         try {
             await this.pool.query('CREATE EXTENSION IF NOT EXISTS timescaledb');
@@ -46,24 +64,33 @@ class DatabaseManager {
         }
     }
 
+    /**
+     * Create core tables including perp_data, perp_status, perp_errors, and perpspec_schema.
+     * The perp_data table stores all time-series data with core columns:
+     * ts (timestamp), symbol, source (perpspec name), interval, and OHLCV columns.
+     */
     async createCoreTables() {
-        // Core time-series table
         try {
             await this.pool.query(`
                 CREATE TABLE IF NOT EXISTS perp_data (
-                    ts TIMESTAMP NOT NULL,
+                    ts BIGINT NOT NULL,
                     symbol TEXT NOT NULL,
                     source TEXT NOT NULL,
+                    perpspec TEXT NOT NULL,
                     interval TEXT DEFAULT '1min',
+                    o NUMERIC(20,8),
+                    h NUMERIC(20,8),
+                    l NUMERIC(20,8),
+                    c NUMERIC(20,8),
+                    v NUMERIC(20,8),
                     PRIMARY KEY (ts, symbol, source)
                 )
             `);
-            console.log('  - Created/updated perp_data table.');
+            console.log('  - Created/updated perp_data table with OHLCV columns.');
         } catch (error) {
             console.error(`  - Error creating/updating perp_data table: ${error.message}`);
         }
 
-        // Hypertable creation
         try {
             await this.pool.query(`SELECT create_hypertable('perp_data', 'ts', if_not_exists => TRUE)`);
             console.log('  - Created perp_data hypertable.');
@@ -71,7 +98,6 @@ class DatabaseManager {
             console.error(`  - Error creating hypertable: ${error.message}`);
         }
 
-        // Status tracking table
         try {
             await this.pool.query(`
                 CREATE TABLE IF NOT EXISTS perp_status (
@@ -88,7 +114,6 @@ class DatabaseManager {
             console.error(`  - Error creating perp_status table: ${error.message}`);
         }
 
-        // Error logging table
         try {
             await this.pool.query(`
                 CREATE TABLE IF NOT EXISTS perp_errors (
@@ -106,7 +131,6 @@ class DatabaseManager {
             console.error(`  - Error creating perp_errors table: ${error.message}`);
         }
 
-        // perpspec_schema table
         try {
             await this.pool.query(`
                 CREATE TABLE IF NOT EXISTS perpspec_schema (
@@ -121,7 +145,41 @@ class DatabaseManager {
         }
     }
 
-    // Helper to get column type based on value (simplified for this context)
+    /**
+     * Insert fixed perpspec schemas for core OHLCV data sources.
+     * Each schema includes mandatory fields: ts, symbol, source, interval,
+     * plus OHLCV columns.
+     */
+    async insertFixedPerpspecSchemas() {
+        const fixedSchemas = [
+            { name: 'bin-ohlcv', fields: ['ts', 'symbol', 'source', 'perpspec', 'interval', 'o', 'h', 'l', 'c', 'v'] },
+            { name: 'byb-ohlcv', fields: ['ts', 'symbol', 'source', 'perpspec', 'interval', 'o', 'h', 'l', 'c', 'v'] },
+            { name: 'okx-ohlcv', fields: ['ts', 'symbol', 'source', 'perpspec', 'interval', 'o', 'h', 'l', 'c', 'v'] }
+        ];
+
+        for (const schema of fixedSchemas) {
+            try {
+                await this.pool.query(
+                    `INSERT INTO perpspec_schema (perpspec_name, fields)
+                     VALUES ($1, $2)
+                     ON CONFLICT (perpspec_name) DO UPDATE SET
+                        fields = EXCLUDED.fields,
+                        last_updated = NOW()`,
+                    [schema.name, JSON.stringify(schema.fields)]
+                );
+                console.log(`  - Registered perpspec_schema for '${schema.name}'`);
+            } catch (error) {
+                console.error(`  - Error registering perpspec_schema for '${schema.name}': ${error.message}`);
+            }
+        }
+    }
+
+    /**
+     * Determine the appropriate column type for a given value.
+     * Used for dynamic column creation.
+     * @param {*} value
+     * @returns {string} SQL column type
+     */
     getColumnType(value) {
         if (value === null || value === undefined) return 'TEXT';
         if (typeof value === 'number') return Number.isInteger(value) ? 'BIGINT' : 'NUMERIC(20, 8)';
@@ -130,10 +188,12 @@ class DatabaseManager {
         return 'TEXT';
     }
 
-    // ------------------------------------------------------------------------
-    //  UNIVERSAL DATA INSERTION (SHARED BY ALL SCRIPTS)
-    // ------------------------------------------------------------------------
-
+    /**
+     * Insert an array of data objects into the perp_data table.
+     * Uses bulk insert with ON CONFLICT DO NOTHING to avoid duplicates.
+     * @param {string} perpspecName - The source/perpspec name for the data.
+     * @param {Array<Object>} dataArray - Array of data records to insert.
+     */
     async insertData(perpspecName, dataArray) {
         if (!Array.isArray(dataArray) || dataArray.length === 0) {
             console.log('  - ⚠️ No data to insert.');
@@ -161,11 +221,25 @@ class DatabaseManager {
         }
     }
 
-    // Logging methods remain simple console logs
+    /**
+     * Log status messages for scripts.
+     * @param {string} scriptName
+     * @param {string} status
+     * @param {string} message
+     * @param {object|null} details
+     */
     async logStatus(scriptName, status, message, details = null) {
         console.log(`  - Status: ${scriptName} - ${status} - ${message}`);
     }
 
+    /**
+     * Log errors for scripts.
+     * @param {string} scriptName
+     * @param {string} errorType
+     * @param {string} errorCode
+     * @param {string} errorMessage
+     * @param {object|null} details
+     */
     async logError(scriptName, errorType, errorCode, errorMessage, details = null) {
         console.error(`  - Error: ${scriptName} - ${errorCode} - ${errorMessage}`);
         if (details) {
@@ -177,15 +251,13 @@ class DatabaseManager {
 const dbManager = new DatabaseManager();
 module.exports = dbManager;
 
-// --- MODIFIED PART ---
-// Only call initialize() if this script is run directly (i.e., not required by another module)
 if (require.main === module) {
     async function runSetup() {
         try {
             await dbManager.initialize();
         } catch (error) {
             console.error('❌ Database setup failed:', error);
-            process.exit(1); // Exit with an error code
+            process.exit(1);
         }
     }
     runSetup();

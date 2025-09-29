@@ -7,6 +7,11 @@ const PORT = process.env.PORT || 3000;
 app.use(express.static('public'));
 app.use(express.json());
 
+/**
+ * GET /api/perpspecs
+ * Returns all perpspec schemas with their JSONB fields arrays.
+ * Used by UI to populate perpspec dropdown and display schema fields.
+ */
 app.get('/api/perpspecs', async (req, res) => {
     try {
         const result = await dbManager.pool.query(`
@@ -19,12 +24,16 @@ app.get('/api/perpspecs', async (req, res) => {
     }
 });
 
+/**
+ * GET /api/data/:perpspec
+ * Returns paginated data rows for the specified perpspec.
+ * Selects columns dynamically based on perpspec schema fields plus core columns.
+ */
 app.get('/api/data/:perpspec', async (req, res) => {
     try {
         const { perpspec } = req.params;
         const limit = parseInt(req.query.limit) || 100;
         const offset = parseInt(req.query.offset) || 0;
-
         const schemaInfo = await dbManager.pool.query(`
             SELECT fields FROM perpspec_schema WHERE perpspec_name = $1
         `, [perpspec]);
@@ -43,15 +52,17 @@ app.get('/api/data/:perpspec', async (req, res) => {
 
         const dataQuery = `
             SELECT ${selectColumns} FROM perp_data
+            WHERE perpspec = $3
             ORDER BY ts DESC
             LIMIT $1 OFFSET $2
         `;
 
-        const result = await dbManager.pool.query(dataQuery, [limit, offset]);
+        const result = await dbManager.pool.query(dataQuery, [limit, offset, perpspec]);
+
         const countQuery = `
-            SELECT COUNT(*) FROM perp_data
+            SELECT COUNT(*) FROM perp_data WHERE perpspec = $1
         `;
-        const countResult = await dbManager.pool.query(countQuery);
+        const countResult = await dbManager.pool.query(countQuery, [perpspec]);
         res.json({
             data: result.rows,
             total: parseInt(countResult.rows[0].count),
@@ -66,6 +77,10 @@ app.get('/api/data/:perpspec', async (req, res) => {
     }
 });
 
+/**
+ * GET /api/system-summary
+ * Returns recent script status and error logs for UI status dashboard.
+ */
 app.get('/api/system-summary', async (req, res) => {
     try {
         const recentStatus = await dbManager.pool.query(`
@@ -165,50 +180,10 @@ app.get('/api/system-summary', async (req, res) => {
     }
 });
 
-app.get('/api/schema/:tableName', async (req, res) => {
-    try {
-        const { tableName } = req.params;
-        const result = await dbManager.pool.query(`
-            SELECT column_name, data_type, is_nullable, column_default
-            FROM information_schema.columns
-            WHERE table_name = $1
-            ORDER BY ordinal_position
-        `, [tableName]);
-        res.json(result.rows);
-    } catch (error) {
-        console.error(`Error fetching schema for table '${req.params.tableName}':`, error);
-        res.status(500).json({ error: `Failed to fetch schema for table '${req.params.tableName}'` });
-    }
-});
-
-app.get('/api/status', async (req, res) => {
-    try {
-        const result = await dbManager.pool.query(`
-            SELECT * FROM perp_status
-            ORDER BY created_at DESC
-            LIMIT 100
-        `);
-        res.json(result.rows);
-    } catch (error) {
-        console.error('Error fetching status logs:', error);
-        res.status(500).json({ error: 'Failed to fetch status logs' });
-    }
-});
-
-app.get('/api/errors', async (req, res) => {
-    try {
-        const result = await dbManager.pool.query(`
-            SELECT * FROM perp_errors
-            ORDER BY ts DESC
-            LIMIT 100
-        `);
-        res.json(result.rows);
-    } catch (error) {
-        console.error('Error fetching error logs:', error);
-        res.status(500).json({ error: 'Failed to fetch error logs' });
-    }
-});
-
+/**
+ * GET /api/alert-cards
+ * Placeholder endpoint for future alert cards feature.
+ */
 app.get('/api/alert-cards', async (req, res) => {
     try {
         res.json({
@@ -221,6 +196,10 @@ app.get('/api/alert-cards', async (req, res) => {
     }
 });
 
+/**
+ * GET /health
+ * Simple health check endpoint.
+ */
 app.get('/health', (req, res) => {
     res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
@@ -229,3 +208,4 @@ app.listen(PORT, () => {
     console.log(`🚀 FadeMoe4 Server running on http://localhost:${PORT}`);
     console.log(`📊 Database viewer available at http://localhost:${PORT}`);
 });
+

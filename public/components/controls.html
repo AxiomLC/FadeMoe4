@@ -1,9 +1,11 @@
+<!-- Controls for toggling views and loading additional buttons -->
 <div class="controls">
     <button id="view-db-btn" class="control-btn active glow-purple">View DB</button>
     <button id="view-alerts-btn" class="control-btn glow-pink">Alert Cards</button>
-<div id="three-buttons-container"></div>
+    <div id="three-buttons-container"></div>
 </div>
 <script>
+  // Load additional buttons asynchronously
   async function loadThreeButtons() {
     try {
       const response = await fetch('components/3buttons.html');
@@ -16,6 +18,7 @@
   }
   loadThreeButtons();
 </script>
+<!-- Secondary controls container for DB view controls -->
 <div class="controls-row-secondary" id="dbviewcontrol-container">
     <!-- dbviewcontrol.html will be loaded here -->
 </div>
