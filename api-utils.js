@@ -25,7 +25,12 @@ const API_CONFIG_DEFAULTS = {
  * @param {object|null} [details=null] - Optional additional details about the status.
  */
 async function logScriptStatus(dbManager, scriptName, status, message, details = null) {
+  try {
     await dbManager.logStatus(scriptName, status, message, details);
+    } catch (error) {
+    console.error(`apiUtils.logScriptStatus failed:`, error);
+        throw error;
+    }
 }
 
 /**
@@ -38,7 +43,12 @@ async function logScriptStatus(dbManager, scriptName, status, message, details =
  * @param {object|null} [details=null] - Optional additional details about the error.
  */
 async function logScriptError(dbManager, scriptName, errorType, errorCode, errorMessage, details = null) {
+    try {
     await dbManager.logError(scriptName, errorType, errorCode, errorMessage, details);
+    } catch (error) {
+    console.error(`apiUtils.logScriptError failed:`, error);
+        throw error;
+    }
 }
 
 // ============================================================================
@@ -107,7 +117,8 @@ function toMillis(ts) {
  */
 async function ensureColumnsExist(dbManager, expectedFields) {
     try {
-        const existingColumns = await dbManager.pool.query(`
+        const existingColumns = await dbManager.pool.query(
+            `
             SELECT column_name
             FROM information_schema.columns
             WHERE table_name = 'perp_data'
@@ -118,7 +129,7 @@ async function ensureColumnsExist(dbManager, expectedFields) {
             if (!existingColumnNames.includes(field)) {
                 // Defaulting to NUMERIC for potential floating-point values like funding rates or prices.
                 // Adjust if specific columns require different types (e.g., BIGINT for ts if not already handled).
-                const columnType = 'NUMERIC(20, 8)'; 
+                const columnType = 'NUMERIC(20, 8)';
 
                 const addColumnQuery = `ALTER TABLE perp_data ADD COLUMN ${field} ${columnType}`;
                 try {
@@ -166,5 +177,5 @@ module.exports = {
     logScriptError,
     ensureColumnsExist,
     updatePerpspecSchema,
-    toMillis // <-- Export the new utility function
+    toMillis
 };

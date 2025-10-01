@@ -13,7 +13,7 @@ let totalRecords = 0;
 document.addEventListener('DOMContentLoaded', () => {
     loadComponents();
     loadSystemStatus();
-    setInterval(loadSystemStatus, 4000);
+    setInterval(loadSystemStatus, 60000);
 
     const modal = document.getElementById('schemaModal');
     const closeBtn = document.getElementById('modalCloseBtn');
@@ -125,16 +125,30 @@ function initDbviewControlListeners() {
             alert('Please select a Perpspec');
             return;
         }
+        currentPerpspec = selected;
+        currentOffset = 0;
         fetchAndDisplayDataDbviewControl(selected);
     });
 
-    viewSchemaBtn.addEventListener('click', async () => {
-        const selected = perpspecDropdown.value;
-        if (!selected) {
-            alert('Please select a Perpspec');
-            return;
+    document.getElementById('prevPageBtn').addEventListener('click', () => {
+        if (currentOffset > 0) {
+            currentOffset -= currentLimit;
+            fetchAndDisplayDataDbviewControl(currentPerpspec);
         }
-        await fetchAndDisplaySchemaFields(selected);
+    });
+
+    document.getElementById('nextPageBtn').addEventListener('click', () => {
+        currentOffset += currentLimit;
+        fetchAndDisplayDataDbviewControl(currentPerpspec);
+    });
+
+    document.getElementById('goToPageBtn').addEventListener('click', async () => {
+        const page = parseInt(document.getElementById('pageInput').value);
+        if (page > 0) {
+            currentOffset = (page - 1) * currentLimit;
+            console.log(`Fetching data for perpspec: ${currentPerpspec} with limit: ${currentLimit} and offset: ${currentOffset}`);
+            await fetchAndDisplayDataDbviewControl(currentPerpspec);
+        }
     });
 }
 
@@ -225,18 +239,17 @@ async function fetchAndDisplayDataDbviewControl(perpspec) {
     container.innerHTML = '<div class="loading">Loading data...</div>';
 
     try {
-        const schemaResponse = await fetch('/api/perpspecs');
-        if (!schemaResponse.ok) throw new Error(`HTTP error! status: ${schemaResponse.status}`);
-        const perpspecs = await schemaResponse.json();
-        const schema = perpspecs.find(ps => ps.perpspec_name === perpspec);
-        if (!schema) throw new Error(`Schema for ${perpspec} not found`);
-
-        // Filter out 'perpspec' from fields to display
-        const fields = schema.fields.filter(f => f !== 'perpspec');
-
-        const dataResponse = await fetch(`/api/data/${perpspec}?limit=100&offset=0`);
+        const dataResponse = await fetch(`/api/data/${perpspec}?limit=${currentLimit}&offset=${currentOffset}`);
         if (!dataResponse.ok) throw new Error(`HTTP error! status: ${dataResponse.status}`);
         const dataResult = await dataResponse.json();
+        const totalRecords = dataResult.total;
+        const totalPages = dataResult.totalPages;
+        const fields = dataResult.fields || [];
+
+        const totalDisplay = document.getElementById('totalRecordsDisplay');
+        if (totalDisplay) {
+            totalDisplay.innerText = `Total Pages: ${totalPages}`;
+        }
 
         if (!dataResult.data || dataResult.data.length === 0) {
             container.innerHTML = '<div class="loading">No data found for selected Perpspec.</div>';
@@ -244,7 +257,6 @@ async function fetchAndDisplayDataDbviewControl(perpspec) {
         }
 
         const coreColumns = ['ts', 'symbol', 'source', 'interval'];
-        // Exclude 'perpspec' from core columns as well if present
         const filteredCoreColumns = coreColumns.filter(c => c !== 'perpspec');
         const allColumns = [...new Set([...filteredCoreColumns, ...fields])];
 

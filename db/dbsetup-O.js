@@ -2,6 +2,17 @@ const { Pool } = require('pg');
 const format = require('pg-format');
 require('dotenv').config();
 
+/**
+ * DatabaseManager handles all database setup, schema management,
+ * and data insertion for the FadeMoe4 platform.
+ * 
+ * Core tables:
+ * - perp_data: unified time-series table keyed by (ts, symbol, source)
+ * - perpspec_schema: metadata describing dynamic schema fields per perpspec
+ * - perp_status, perp_errors: logging and error tracking
+ * 
+ * Uses TimescaleDB hypertables for efficient time-series data storage.
+ */
 class DatabaseManager {
     constructor() {
         this.pool = new Pool({
@@ -13,6 +24,10 @@ class DatabaseManager {
         });
     }
 
+    /**
+     * Initialize the database by dropping existing tables,
+     * enabling extensions, creating core tables, and inserting fixed schemas.
+     */
     async initialize() {
         console.log('⚙️ Setting up database...');
         await this.dropExistingTables();
@@ -22,6 +37,9 @@ class DatabaseManager {
         console.log('✅ Database setup complete. Success.');
     }
 
+    /**
+     * Drop existing tables to reset the database schema.
+     */
     async dropExistingTables() {
         const tablesToDrop = ['perp_data', 'perp_status', 'perp_errors', 'perpspec_schema'];
         for (const table of tablesToDrop) {
@@ -34,6 +52,9 @@ class DatabaseManager {
         }
     }
 
+    /**
+     * Enable required PostgreSQL extensions, such as TimescaleDB.
+     */
     async enableExtensions() {
         try {
             await this.pool.query('CREATE EXTENSION IF NOT EXISTS timescaledb');
@@ -43,6 +64,11 @@ class DatabaseManager {
         }
     }
 
+    /**
+     * Create core tables including perp_data, perp_status, perp_errors, and perpspec_schema.
+     * The perp_data table stores all time-series data with core columns:
+     * ts (timestamp), symbol, source (perpspec name), interval, and OHLCV columns.
+     */
     async createCoreTables() {
         try {
             await this.pool.query(`
@@ -79,8 +105,8 @@ class DatabaseManager {
                     script_name TEXT NOT NULL,
                     status TEXT NOT NULL,
                     message TEXT,
-                    details JSONB,
-                    ts TIMESTAMP DEFAULT NOW()
+                    ts_completed TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT NOW()
                 )
             `);
             console.log('  - Created perp_status table.');
@@ -119,6 +145,11 @@ class DatabaseManager {
         }
     }
 
+    /**
+     * Insert fixed perpspec schemas for core OHLCV data sources.
+     * Each schema includes mandatory fields: ts, symbol, source, interval,
+     * plus OHLCV columns.
+     */
     async insertFixedPerpspecSchemas() {
         const fixedSchemas = [
             { name: 'bin-ohlcv', fields: ['ts', 'symbol', 'source', 'perpspec', 'interval', 'o', 'h', 'l', 'c', 'v'] },
@@ -143,6 +174,26 @@ class DatabaseManager {
         }
     }
 
+    /**
+     * Determine the appropriate column type for a given value.
+     * Used for dynamic column creation.
+     * @param {*} value
+     * @returns {string} SQL column type
+     */
+    getColumnType(value) {
+        if (value === null || value === undefined) return 'TEXT';
+        if (typeof value === 'number') return Number.isInteger(value) ? 'BIGINT' : 'NUMERIC(20, 8)';
+        if (typeof value === 'boolean') return 'BOOLEAN';
+        if (typeof value === 'object') return 'JSONB';
+        return 'TEXT';
+    }
+
+    /**
+     * Insert an array of data objects into the perp_data table.
+     * Uses bulk insert with ON CONFLICT DO NOTHING to avoid duplicates.
+     * @param {string} perpspecName - The source/perpspec name for the data.
+     * @param {Array<Object>} dataArray - Array of data records to insert.
+     */
     async insertData(perpspecName, dataArray) {
         if (!Array.isArray(dataArray) || dataArray.length === 0) {
             console.log('  - ⚠️ No data to insert.');
@@ -163,36 +214,36 @@ class DatabaseManager {
             `, values);
 
             await this.pool.query(query);
-            // console.log(`  - Inserted ${dataArray.length} records for perpspec '${perpspecName}'.`);
+            console.log(`  - Inserted ${dataArray.length} records for perpspec '${perpspecName}'.`);
         } catch (error) {
             console.error(`  - Error inserting data for perpspec '${perpspecName}': ${error.message}`);
             throw error;
         }
     }
 
+    /**
+     * Log status messages for scripts.
+     * @param {string} scriptName
+     * @param {string} status
+     * @param {string} message
+     * @param {object|null} details
+     */
     async logStatus(scriptName, status, message, details = null) {
-        try {
-            const query = `
-                INSERT INTO perp_status (script_name, status, message, details, ts)
-                VALUES ($1, $2, $3, $4, NOW())
-            `;
-            await this.pool.query(query, [scriptName, status, message, details]);
-            // console.log(`  - Status logged to DB: ${scriptName} - ${status}`);
-        } catch (error) {
-            console.error(`  - Failed to log status:`, error);
-        }
+        console.log(`  - Status: ${scriptName} - ${status} - ${message}`);
     }
 
+    /**
+     * Log errors for scripts.
+     * @param {string} scriptName
+     * @param {string} errorType
+     * @param {string} errorCode
+     * @param {string} errorMessage
+     * @param {object|null} details
+     */
     async logError(scriptName, errorType, errorCode, errorMessage, details = null) {
-        try {
-            const query = `
-                INSERT INTO perp_errors (script_name, error_type, error_code, error_message, details, ts)
-                VALUES ($1, $2, $3, $4, $5, NOW())
-            `;
-            await this.pool.query(query, [scriptName, errorType, errorCode, errorMessage, details]);
-            console.log(`  - Error logged to DB: ${scriptName} - ${errorCode}`);
-        } catch (error) {
-            console.error(`  - Failed to log error:`, error);
+        console.error(`  - Error: ${scriptName} - ${errorCode} - ${errorMessage}`);
+        if (details) {
+            console.error(`    Details: ${JSON.stringify(details)}`);
         }
     }
 }

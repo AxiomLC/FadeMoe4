@@ -7,11 +7,6 @@ const PORT = process.env.PORT || 3000;
 app.use(express.static('public'));
 app.use(express.json());
 
-/**
- * GET /api/perpspecs
- * Returns all perpspec schemas with their JSONB fields arrays.
- * Used by UI to populate perpspec dropdown and display schema fields.
- */
 app.get('/api/perpspecs', async (req, res) => {
     try {
         const result = await dbManager.pool.query(`
@@ -24,11 +19,6 @@ app.get('/api/perpspecs', async (req, res) => {
     }
 });
 
-/**
- * GET /api/data/:perpspec
- * Returns paginated data rows for the specified perpspec.
- * Selects columns dynamically based on perpspec schema fields plus core columns.
- */
 app.get('/api/data/:perpspec', async (req, res) => {
     try {
         const { perpspec } = req.params;
@@ -63,9 +53,13 @@ app.get('/api/data/:perpspec', async (req, res) => {
             SELECT COUNT(*) FROM perp_data WHERE perpspec = $1
         `;
         const countResult = await dbManager.pool.query(countQuery, [perpspec]);
+        const totalRecords = parseInt(countResult.rows[0].count);
+        const totalPages = Math.ceil(totalRecords / limit);
+
         res.json({
             data: result.rows,
-            total: parseInt(countResult.rows[0].count),
+            total: totalRecords,
+            totalPages: totalPages,
             limit,
             offset,
             perpspec,
@@ -77,21 +71,24 @@ app.get('/api/data/:perpspec', async (req, res) => {
     }
 });
 
-/**
- * GET /api/system-summary
- * Returns recent script status and error logs for UI status dashboard.
- */
 app.get('/api/system-summary', async (req, res) => {
     try {
+        const latestStatusResult = await dbManager.pool.query(`
+            SELECT DISTINCT ON (script_name) script_name, status, ts
+            FROM perp_status
+            ORDER BY script_name, ts DESC
+        `);
+
+        const runningScripts = latestStatusResult.rows.filter(r => r.status === 'running').map(r => r.script_name);
+
         const recentStatus = await dbManager.pool.query(`
             SELECT
                 script_name,
                 status,
                 message,
-                ts_completed,
-                created_at
+                ts
             FROM perp_status
-            ORDER BY created_at DESC
+            ORDER BY ts DESC
             LIMIT 20
         `);
 
@@ -110,20 +107,17 @@ app.get('/api/system-summary', async (req, res) => {
 
         let statusText = '';
 
+        statusText += `<div id="status-flex-container" style="display:flex; gap:20px; max-height:250px; background-color:#1e1e2f; padding:0; border-radius:8px; color:#d1d5db; overflow:hidden;">`;
+
+        statusText += `<div id="status-left" style="flex:1 1 60%; background-color:#000; padding:5px; border:none; overflow-y:auto; max-height:200px;">`;
         statusText += `<div style="margin-bottom: 15px;">`;
-        statusText += `<h3 style="color: #9f59ff; margin: 0 0 10px 0;">📊 System Status</h3>`;
-
-        if (recentStatus.rows.length > 0) {
-            const successCount = recentStatus.rows.filter(r => r.status === 'success').length;
-            const runningCount = recentStatus.rows.filter(r => r.status === 'running').length;
-            const errorCount = recentStatus.rows.filter(r => r.status === 'error').length;
-
-            statusText += `<div style="margin-bottom: 10px;">`;
-            statusText += `<strong style="color: #b569ff;">Recent Operations:</strong> `;
-            if (successCount > 0) statusText += `<span style="color: #4ade80;">${successCount} completed</span> `;
-            if (runningCount > 0) statusText += `<span style="color: #fbbf24;">${runningCount} running</span> `;
-            if (errorCount > 0) statusText += `<span style="color: #f87171;">${errorCount} errors</span>`;
-            statusText += `</div>`;
+        statusText += `<h3 style="color: #9f59ff; margin: 0 0 10px 0;">📊 Current Operations</h3>`;
+        if (runningScripts.length > 0) {
+            runningScripts.forEach(script => {
+                statusText += `<div style="padding-left: 15px; margin-top: 3px; color: #fbbf24; font-size: 14px;">• ${script}</div>`;
+            });
+        } else {
+            statusText += `<div style="color: #d1d5db;">No scripts currently running.</div>`;
         }
         statusText += `</div>`;
 
@@ -136,18 +130,27 @@ app.get('/api/system-summary', async (req, res) => {
                 else if (op.status === 'running') statusColor = '#fbbf24';
                 else if (op.status === 'error') statusColor = '#f87171';
 
+                const ts = new Date(op.ts);
+                const timeStr = ts.toISOString().substr(11, 8) + ' UTC';
+
                 statusText += `<div style="padding-left: 15px; margin-top: 3px; color: ${statusColor}; font-size: 14px;">`;
-                statusText += `• ${op.script_name}: ${op.message || op.status}`;
+                statusText += `• ${op.script_name} [${timeStr}]: ${op.message || op.status}`;
                 statusText += `</div>`;
             });
             statusText += `</div>`;
         }
 
+        statusText += `</div>`;
+
+        statusText += `<div id="status-right" style="flex:1 1 40%; background-color:#000; border:none; border-left: 1px solid rgba(159, 89, 255, 0.3); padding:5px; overflow-y:auto; max-height:200px;">`;
+
         if (recentErrors.rows.length > 0) {
-            statusText += `<div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(159, 89, 255, 0.3);">`;
             statusText += `<h4 style="color: #f87171; margin: 0 0 10px 0;">⚠️ Recent Issues</h4>`;
 
             recentErrors.rows.slice(0, 3).forEach(error => {
+                const ts = new Date(error.ts);
+                const timeStr = ts.toISOString().substr(11, 8) + ' UTC';
+
                 let errorType = 'Other';
                 if (error.error_code === '400') errorType = 'Bad Parameters';
                 else if (error.error_code === '401') errorType = 'API Key Issues';
@@ -155,35 +158,32 @@ app.get('/api/system-summary', async (req, res) => {
                 else if (error.error_code === '500') errorType = 'Server Errors';
 
                 statusText += `<div style="margin-bottom: 8px; padding-left: 10px;">`;
-                statusText += `<strong style="color: #fbbf24;">${error.script_name}:</strong> ${error.error_message}<br>`;
+                statusText += `<strong style="color: #fbbf24;">${error.script_name} [${timeStr}]:</strong> ${error.error_message}<br>`;
                 statusText += `<small style="color: #d1d5db;">${errorType} (${error.error_code})</small>`;
                 statusText += `</div>`;
             });
-            statusText += `</div>`;
+        } else {
+            statusText += `<div style="color: #d1d5db;">No recent issues.</div>`;
         }
 
-        if (recentStatus.rows.length === 0 && recentErrors.rows.length === 0) {
+        statusText += `</div>`;
+
+        statusText += `</div>`;
+
+        if (runningScripts.length === 0 && recentStatus.rows.length === 0 && recentErrors.rows.length === 0) {
             statusText = `<div style="text-align: center; padding: 20px;">`;
             statusText += `<h3 style="color: #9f59ff; margin: 0 0 10px 0;">🏁 System Ready</h3>`;
             statusText += `<p style="color: #d1d5db; margin: 0;">No recent activity. Data collection scripts are ready to run.</p>`;
             statusText += `</div>`;
         }
 
-        res.json({
-            statusText,
-            errors: recentErrors.rows,
-            operations: recentStatus.rows
-        });
+        res.json({ statusText, errors: recentErrors.rows, operations: recentStatus.rows });
     } catch (error) {
         console.error('Error fetching system summary:', error);
         res.status(500).json({ error: 'Failed to fetch system summary' });
     }
 });
 
-/**
- * GET /api/alert-cards
- * Placeholder endpoint for future alert cards feature.
- */
 app.get('/api/alert-cards', async (req, res) => {
     try {
         res.json({
@@ -196,10 +196,6 @@ app.get('/api/alert-cards', async (req, res) => {
     }
 });
 
-/**
- * GET /health
- * Simple health check endpoint.
- */
 app.get('/health', (req, res) => {
     res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });

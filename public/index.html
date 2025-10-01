@@ -12,9 +12,9 @@
         <div class="header-container">
             <div class="header-left">
                 <!-- LOGO COMMENT: Insert logo image here -->
-                <!-- <img src="path/to/your/logo.png" alt="FadeMoe Logo" class="logo-img" /> -->
-                <h1 class="glowing-title">🎯 FadeMoe4</h1>
-                <p>Real-time cryptocurrency data monitoring system</p>
+                <img src="Logo13b.png" alt="FadeMoe Logo" class="glowing-logo" />
+                <h1 class="glowing-title">FadeMoe free beta</h1>
+                <p>Moe knows trading</p>
             </div>
             <div id="status-box-container" class="header-right"></div>
         </div>
@@ -30,6 +30,17 @@
         <div class="main-content">
             <!-- Database View (default) -->
             <div id="db-view-container" class="content-section active"></div>
+
+            <!-- Total Records Display -->
+            <div id="totalRecordsDisplay" style="text-align: center; margin-top: 10px; color: #d1d5db;"></div>
+
+            <!-- Pagination Controls -->
+            <div class="pagination">
+                <button id="prevPageBtn">Previous</button>
+                <input type="number" id="pageInput" min="1" placeholder="Page" />
+                <button id="goToPageBtn">Go</button>
+                <button id="nextPageBtn">Next</button>
+            </div>
 
             <!-- Alert Cards View (hidden by default) -->
             <div id="alert-view-container" class="content-section hidden">

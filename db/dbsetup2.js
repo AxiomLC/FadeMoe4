@@ -211,3 +211,30 @@ async function runSetup() {
 if (require.main === module) {
     runSetup();
 }
+
+// NEW ASYNC function per AI -- test debug error/logging problem ----------------
+async function logStatus(scriptName, status, message, details) {
+  try {
+    console.log(`dbManager.logStatus called: script=${scriptName}, status=${status}, message=${message}`);
+    // Example insert query - replace with your actual query
+    const query = `INSERT INTO perp_status (script_name, status, message, details) VALUES ($1, $2, $3, $4)`;
+    await pool.query(query, [scriptName, status, message, details]);
+    console.log(`dbManager.logStatus insert succeeded`);
+  } catch (error) {
+    console.error(`dbManager.logStatus insert failed:`, error);
+    throw error;
+  }
+}
+
+async function logError(scriptName, errorType, errorCode, errorMessage, details) {
+  try {
+    console.log(`dbManager.logError called: script=${scriptName}, type=${errorType}, code=${errorCode}, message=${errorMessage}`);
+    // Example insert query - replace with your actual query
+    const query = `INSERT INTO perp_errors (script_name, error_type, error_code, error_message, details) VALUES ($1, $2, $3, $4, $5)`;
+    await pool.query(query, [scriptName, errorType, errorCode, errorMessage, details]);
+    console.log(`dbManager.logError insert succeeded`);
+  } catch (error) {
+    console.error(`dbManager.logError insert failed:`, error);
+    throw error;
+  }
+}
