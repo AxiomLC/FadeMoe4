@@ -163,7 +163,7 @@ async function updatePerpspecSchema(dbManager, perpspecName, fields) {
                 last_updated = NOW()`,
             [perpspecName, JSON.stringify(fields)]
         );
-        console.log(`  - ✅ Updated perpspec_schema for '${perpspecName}' with fields: ${fields.join(', ')}`);
+        // NOT NEEDED - only for dynamic scripts--console.log(`  - ✅ Updated perpspec_schema for '${perpspecName}' with fields: ${fields.join(', ')}`);
     } catch (error) {
         console.error(`❌ Error updating perpspec_schema for '${perpspecName}':`, error.message);
         throw error;

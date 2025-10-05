@@ -1,10 +1,23 @@
 <!-- Controls for selecting perpspec and viewing schema -->
 <div class="dbview-controls">
-    <select id="perpspecDropdown">
-        <option value="">Loading Perpspecs...</option>
-    </select>
-    <button id="selectPerpspecBtn" class="control-btn">Select</button>
-    <button id="viewSchemaBtn" class="control-btn">View Schema</button>
+    <div class="controls-left">
+        <select id="perpspecDropdown">
+            <option value="">Loading Perpspecs...</option>
+        </select>
+        <button id="selectPerpspecBtn" class="control-btn">Select</button>
+        <button id="viewSchemaBtn" class="control-btn">View Schema</button>
+    </div>
+    <div class="controls-right">
+        <!-- Total Records Display -->
+        <div id="totalRecordsDisplay" style="text-align: center; margin-top: 10px; color: #d1d5db;"></div>
+
+        <!-- Pagination Controls -->
+        <div class="pagination">
+            <button id="prevPageBtn">Previous</button>
+            <input type="number" id="pageInput" min="1" placeholder="Page" />
+            <button id="goToPageBtn">Go</button>
+            <button id="nextPageBtn">Next</button>
+        </div>
+    </div>
 </div>
 <div id="schemaDisplay" style="display:none; margin-top: 10px; padding: 10px; background: rgba(255, 255, 255, 0.1); border-radius: 8px; max-height: 200px; overflow-y: auto; font-size: 14px; color: #ddd;"></div>
-

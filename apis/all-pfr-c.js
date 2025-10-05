@@ -1,107 +1,121 @@
+/* ==========================================
+ * all-pfr-c.js  5 OCt 2025
+ * Continuous Premium Funding Rate Polling Script
+ *"Premium Index Kline" Bin/Byb, "Premium Index" Okx
+ * ========================================== */
+
 const fs = require('fs');
 const axios = require('axios');
 const apiUtils = require('../api-utils');
 const dbManager = require('../db/dbsetup');
-require('dotenv').config();
 
-const SCRIPT_NAME = 'all-pfr-c.js';
+const SCRIPT_NAME = 'all-pfr-c2.js';
 const POLL_INTERVAL = 60 * 1000; // 1 minute
 
-// ============================================================================
-// EXCHANGE CONFIGURATION
-// ============================================================================
+/* ==========================================
+ * EXCHANGE CONFIGURATION
+ * Defines API URLs, perpspec, and source names for each exchange
+ * ========================================== */
 const EXCHANGE_CONFIG = {
   BINANCE: {
     PERPSPEC: 'bin-pfr',
+    SOURCE: 'bin-pfr',
     URL: 'https://fapi.binance.com/fapi/v1/premiumIndexKlines',
     API_INTERVAL: '1m',
     DB_INTERVAL: '1m'
   },
   BYBIT: {
     PERPSPEC: 'byb-pfr',
+    SOURCE: 'byb-pfr',
     URL: 'https://api.bybit.com/v5/market/premium-index-price-kline',
     API_INTERVAL: '1',
     DB_INTERVAL: '1m'
   },
   OKX: {
     PERPSPEC: 'okx-pfr',
+    SOURCE: 'okx-pfr',
     URL: 'https://www.okx.com/api/v5/public/premium-history',
     DB_INTERVAL: '1m'
   }
 };
 
-// ============================================================================
-// DATA PROCESSING FUNCTIONS
-// ============================================================================
+//* ==========================================
+ //* SYMBOL TRANSLATION FUNCTIONS
 
-/**
- * Process Binance Premium Index Klines data
- * Returns: [timestamp, open, high, low, close, ...]
- */
+const perpList = require('../perp-list');
+
+//Translate symbol for Binance and Bybit (e.g., 'SOL' -> 'SOLUSDT')
+function translateSymbolBinanceBybit(symbol) {
+  return symbol + 'USDT';
+}
+
+ //* Translate symbol for OKX (e.g., 'SOL' -> 'SOL-USDT-SWAP')
+function translateSymbolOkx(symbol) {
+  return `${symbol}-USDT-SWAP`;
+}
+/* ==========================================
+ * DATA PROCESSING FUNCTIONS
+ *
+ * Parse raw API data into normalized records
+ * ========================================== */
+
 function processBinanceData(rawData, baseSymbol, config) {
   const perpspec = config.PERPSPEC;
+  const source = config.SOURCE;
 
   return rawData.map(dataPoint => {
     try {
       const timestamp = dataPoint[0];
-      const pfr = parseFloat(dataPoint[4]); // Close
+      const pfr = parseFloat(dataPoint[4]);
 
       if (isNaN(pfr)) {
-        console.warn(`[${perpspec}] Invalid PFR for ${baseSymbol}:`, dataPoint[4]);
-        return null;
+        return null; // Skip invalid data
       }
 
       return {
         ts: apiUtils.toMillis(BigInt(timestamp)),
-        symbol: baseSymbol,
-        source: perpspec,
-        perpspec,
+      symbol: baseSymbol,
+        source: source,
+        perpspec: perpspec,
         interval: config.DB_INTERVAL,
         pfr
       };
     } catch (e) {
-      console.warn(`[${perpspec}] Error processing ${baseSymbol}:`, e.message);
-      return null;
-    }
+      return null; // Skip on error
+  }
   }).filter(item => item !== null);
 }
 
-/**
- * Process Bybit Premium Index data
- */
 function processBybitData(rawData, baseSymbol, config) {
   const perpspec = config.PERPSPEC;
+  const source = config.SOURCE;
 
   return rawData.map(dataPoint => {
-    try {
+  try {
       const timestamp = dataPoint[0];
-      const pfr = parseFloat(dataPoint[4]); // Close
+      const pfr = parseFloat(dataPoint[4]);
 
       if (isNaN(pfr)) {
-        console.warn(`[${perpspec}] Invalid PFR for ${baseSymbol}:`, dataPoint[4]);
         return null;
-      }
+  }
 
       return {
         ts: apiUtils.toMillis(BigInt(timestamp)),
         symbol: baseSymbol,
-        source: perpspec,
-        perpspec,
+        source: source,
+        perpspec: perpspec,
         interval: config.DB_INTERVAL,
         pfr
       };
     } catch (e) {
-      console.warn(`[${perpspec}] Error processing ${baseSymbol}:`, e.message);
       return null;
     }
   }).filter(item => item !== null);
 }
 
-/**
- * Process OKX Premium History data
- */
 function processOkxData(rawData, baseSymbol, config) {
   const perpspec = config.PERPSPEC;
+  const source = config.SOURCE;
 
   return rawData.map(dataPoint => {
     try {
@@ -109,32 +123,29 @@ function processOkxData(rawData, baseSymbol, config) {
       const pfr = parseFloat(dataPoint.premium);
 
       if (isNaN(pfr)) {
-        console.warn(`[${perpspec}] Invalid PFR for ${baseSymbol}:`, dataPoint.premium);
         return null;
-      }
+    }
 
       return {
         ts: apiUtils.toMillis(BigInt(timestamp)),
         symbol: baseSymbol,
-        source: perpspec,
-        perpspec,
+        source: source,
+        perpspec: perpspec,
         interval: config.DB_INTERVAL,
         pfr
       };
     } catch (e) {
-      console.warn(`[${perpspec}] Error processing ${baseSymbol}:`, e.message);
       return null;
     }
   }).filter(item => item !== null);
 }
 
-// ============================================================================
-// EXCHANGE-SPECIFIC FETCH FUNCTIONS
-// ============================================================================
+/* ==========================================
+ * EXCHANGE-SPECIFIC FETCH FUNCTIONS
+ *
+ * Fetch latest premium funding rate data from each exchange API
+ * ========================================== */
 
-/**
- * Fetches latest Premium Index from Binance
- */
 async function fetchBinancePFR(symbol, config) {
   const params = {
     symbol: symbol,
@@ -146,9 +157,6 @@ async function fetchBinancePFR(symbol, config) {
   return response.data;
 }
 
-/**
- * Fetches latest Premium Index from Bybit
- */
 async function fetchBybitPFR(symbol, config) {
   const params = {
     category: 'linear',
@@ -161,167 +169,189 @@ async function fetchBybitPFR(symbol, config) {
   return response.data.result?.list || [];
 }
 
-/**
- * Fetches latest Premium from OKX
- */
 async function fetchOkxPFR(instId, config) {
   const params = {
     instId: instId,
-    limit: 1
+    limit: 1 // Fetch only the latest record
   };
 
   const response = await axios.get(config.URL, { params, timeout: 5000 });
   if (response.data.code !== "0") {
     throw new Error(`OKX API error: ${response.data.msg}`);
   }
+  // The response.data.data is an array of objects, e.g., [{"instId": "BTC-USDT-SWAP", "premium": "...", "ts": "..."}]
   return response.data.data || [];
 }
 
-// ============================================================================
-// POLLING ORCHESTRATION
-// ============================================================================
+/* ==========================================
+ * POLLING ORCHESTRATION
+ *
+ * Poll all symbols for all exchanges concurrently
+ * ========================================== */
 
-async function pollSymbolAndExchange(baseSymbol, exchangeConfig, dynamicSymbols) {
+async function pollSymbolAndExchange(baseSymbol, exchangeConfig) {
   const perpspec = exchangeConfig.PERPSPEC;
-  const exchangeName = perpspec.split('-')[0];
+  const source = exchangeConfig.SOURCE;
 
-  const symbolMap = dynamicSymbols[baseSymbol];
-  let exchangeSymbol = symbolMap?.[perpspec];
-
-  if (exchangeName === 'okx' && !exchangeSymbol) {
-    exchangeSymbol = symbolMap['okx-swap'] || `${baseSymbol}-USDT-SWAP`;
+  let exchangeSymbol;
+  switch (perpspec) {
+    case 'bin-pfr':
+      exchangeSymbol = translateSymbolBinanceBybit(baseSymbol);
+      break;
+    case 'byb-pfr':
+      exchangeSymbol = translateSymbolBinanceBybit(baseSymbol);
+      break;
+    case 'okx-pfr':
+      exchangeSymbol = translateSymbolOkx(baseSymbol);
+      break;
+    default:
+      return; // Unknown perpspec
   }
-  if (!exchangeSymbol) {
-    return;
-  }
-
-  try {
+    try {
     let rawData = [];
 
-    // Fetch latest data
     switch (perpspec) {
-      case EXCHANGE_CONFIG.BINANCE.PERPSPEC:
+      case 'bin-pfr':
         rawData = await fetchBinancePFR(exchangeSymbol, exchangeConfig);
         break;
-      case EXCHANGE_CONFIG.BYBIT.PERPSPEC:
+      case 'byb-pfr':
         rawData = await fetchBybitPFR(exchangeSymbol, exchangeConfig);
         break;
-      case EXCHANGE_CONFIG.OKX.PERPSPEC:
+      case 'okx-pfr':
         rawData = await fetchOkxPFR(exchangeSymbol, exchangeConfig);
         break;
     }
 
     if (!rawData || rawData.length === 0) {
-      return;
-    }
+      // console.log(`  - No data received for ${perpspec} - ${baseSymbol}`); // Optional: log when no data is returned
+      return; // No data to process
+}
 
-    // Process data
     let processedData = [];
     switch (perpspec) {
-      case EXCHANGE_CONFIG.BINANCE.PERPSPEC:
+      case 'bin-pfr':
         processedData = processBinanceData(rawData, baseSymbol, exchangeConfig);
         break;
-      case EXCHANGE_CONFIG.BYBIT.PERPSPEC:
+      case 'byb-pfr':
         processedData = processBybitData(rawData, baseSymbol, exchangeConfig);
         break;
-      case EXCHANGE_CONFIG.OKX.PERPSPEC:
+      case 'okx-pfr':
         processedData = processOkxData(rawData, baseSymbol, exchangeConfig);
         break;
     }
 
     if (processedData.length === 0) {
-      return;
+      // console.log(`  - No valid processed data for ${perpspec} - ${baseSymbol}`); // Optional: log when no valid data after processing
+      return; // No valid processed data
     }
 
-    // Insert into database
-    const expectedFields = Object.keys(processedData[0]);
-    await apiUtils.ensureColumnsExist(dbManager, expectedFields);
-    await apiUtils.updatePerpspecSchema(dbManager, perpspec, expectedFields);
     await dbManager.insertData(perpspec, processedData);
-
-    console.log(`[${perpspec}] ✅ ${baseSymbol}: PFR=${processedData[0].pfr}`);
-
   } catch (error) {
-    console.error(`[${perpspec}] Error polling ${baseSymbol}:`, error.message);
+    // Log API errors with context
     await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'API', 'POLL_ERROR', error.message, {
-      exchange: exchangeName,
+      exchange: perpspec.split('-')[0],
       symbol: baseSymbol,
       perpspec
     });
   }
 }
 
-// ============================================================================
-// MAIN POLLING LOOP
-// ============================================================================
+/* ==========================================
+ * POLL ALL SYMBOLS
+ * Load static symbol list and poll all exchanges concurrently
+ * ========================================== */
 
 async function pollAllSymbols() {
-  let dynamicSymbols;
-  try {
-    dynamicSymbols = JSON.parse(fs.readFileSync('dynamic-symbols.json', 'utf8'));
-  } catch (error) {
-    console.error('Could not read dynamic-symbols.json');
-    return;
-  }
+  const perpspecs = Object.values(EXCHANGE_CONFIG).map(c => c.PERPSPEC);
 
-  console.log(`\n[${new Date().toISOString().slice(11, 19)}] Polling ${Object.keys(dynamicSymbols).length} symbols...`);
-
-  const exchangesToFetch = [
-    EXCHANGE_CONFIG.BINANCE,
-    EXCHANGE_CONFIG.BYBIT,
-    EXCHANGE_CONFIG.OKX
-  ];
-
+  // Using p-limit to control concurrency
   const pLimit = (await import('p-limit')).default;
-  const limit = pLimit(10); // Higher concurrency for real-time
+  const limit = pLimit(10); // Limit concurrent requests to 10
   const promises = [];
 
-  for (const baseSymbol of Object.keys(dynamicSymbols)) {
-    for (const config of exchangesToFetch) {
-      promises.push(limit(() => pollSymbolAndExchange(baseSymbol, config, dynamicSymbols)));
+  for (const baseSymbol of perpList) {
+    for (const perpspec of perpspecs) {
+      const exchangeConfig = Object.values(EXCHANGE_CONFIG).find(c => c.PERPSPEC === perpspec);
+      if (exchangeConfig) {
+      promises.push(limit(() => pollSymbolAndExchange(baseSymbol, exchangeConfig)));
     }
   }
+}
 
   await Promise.all(promises);
 }
 
-// ============================================================================
-// MAIN EXECUTION
-// ============================================================================
+/* ==========================================
+ * MAIN EXECUTION
+ * Start polling and log status
+ * ========================================== */
 
 async function execute() {
-  console.log(`🚀 Starting ${SCRIPT_NAME} - Continuous Premium Funding Rate polling`);
-  console.log(`⏰ Poll interval: ${POLL_INTERVAL / 1000} seconds`);
+  // Simplified start message for console
+  console.log(`🚀 Starting ${SCRIPT_NAME}`);
+  // #1 Log script start ONCE
+  // Status: "started", Message: "{scriptName} connected"
+  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);
 
-  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', 'Continuous polling started');
+  const perpspecs = Object.values(EXCHANGE_CONFIG).map(c => c.PERPSPEC);
 
-  // Initial poll
+  // Perform an initial poll to get data and log completion statuses
   await pollAllSymbols();
 
-  // Set up recurring polling
-  setInterval(async () => {
+  // Log completion status for each perpspec after the initial poll cycle
+  // Status: "running", Message: "{perpspec} 1min pull complete"
+  for (const perpspec of perpspecs) {
+    const message = `${perpspec} 1min pull complete`;
+    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message);
+    console.log(message); // Console output matches DB message
+  }
+
+  // Polling loop
+  const pollIntervalId = setInterval(async () => {
     try {
       await pollAllSymbols();
+      // Log completion status for each perpspec after each polling cycle
+      for (const perpspec of perpspecs) {
+        const message = `${perpspec} 1min pull complete`;
+        await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message);
+        console.log(message); // Console output matches DB message
+    }
     } catch (error) {
+      // Log system errors during the polling cycle
       console.error('Error in polling cycle:', error.message);
       await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'SYSTEM', 'POLL_CYCLE_ERROR', error.message);
     }
   }, POLL_INTERVAL);
-}
 
-// ============================================================================
-// MODULE ENTRY POINT
-// ============================================================================
+  // Graceful shutdown handler
+  process.on('SIGINT', async () => {
+    clearInterval(pollIntervalId); // Clear the polling interval first
+    console.log(`\n${SCRIPT_NAME} received SIGINT, stopping...`);
+
+    // #3 Log script stop ONCE
+    // Status: "stopped", Message: "{scriptName} stopped smoothly"
+    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', `${SCRIPT_NAME} stopped smoothly`);
+
+    process.exit(0);
+  });
+}
 
 if (require.main === module) {
   execute()
     .then(() => {
-      console.log('✅ PFR continuous polling started');
     })
     .catch(err => {
       console.error('💥 PFR continuous polling failed:', err);
+
+      // Consider a fallback console log if dbManager is not ready.
+      try {
+        apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'SYSTEM', 'INITIALIZATION_FAILED', err.message);
+      } catch (logError) {
+        console.error('Failed to log initial execution error:', logError.message);
+}
       process.exit(1);
     });
 }
 
 module.exports = { execute };
+

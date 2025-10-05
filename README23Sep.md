@@ -1,5 +1,20 @@
-28 Sep UPDATE ***
+*** 5 OCt 2025 UPDATE
+---
+DONE files:
+all-pfr-c
+all-pfr-h
+all-oi-c
+all-oi-h (okx 5 days data only)
+all-ohlcv-h
+web-ohlcv-c
 
+only 2 -c perp files have status: running for UI.
+Eradicated: dynamic-symbols suage, update schema/ check DB columns, check fillSize, Calc gap/ fill.
+Simplified logging.
+No restraints, full speed -h files; only On conflict-Do nothing. pulss 10 days each time. 
+
+
+28 Sep UPDATE ***
 ---
 ## Technical Overview of Backfill System
 

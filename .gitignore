@@ -3,3 +3,4 @@ archive/
 node_modules/
 dynamic-symbols.json
 .continue/
+test/
