@@ -1,4 +1,3 @@
-// db/dbsetup.js
 const { Pool } = require('pg');
 const format = require('pg-format');
 require('dotenv').config();
@@ -200,43 +199,6 @@ class DatabaseManager {
         } catch (error) {
             console.error(`  - Error inserting data for perpspec '${perpspecName}': ${error.message}`);
             throw error;
-        }
-    }
-
-    // Query for perp_data rows in a time range (used for fetching OHLCV context in processing)
-    async queryPerpData(perpspec, symbol, startTs, endTs) {
-        if (!perpspec || !symbol || startTs == null || endTs == null) {
-            console.warn(`Invalid query parameters for queryPerpData: perpspec=${perpspec}, symbol=${symbol}, startTs=${startTs}, endTs=${endTs}`);
-            return [];
-        }
-
-        const query = `
-            SELECT ts, interval, v, c, o, h, l, oi, pfr, lsr
-            FROM perp_data
-            WHERE perpspec = $1 
-              AND symbol = $2 
-              AND ts >= $3 
-              AND ts < $4
-            ORDER BY ts ASC
-        `;
-
-        try {
-            const result = await this.pool.query(query, [perpspec, symbol, BigInt(startTs), BigInt(endTs)]);
-            return result.rows.map(row => ({
-                ...row,
-                ts: Number(row.ts),  // Convert BIGINT back to Number for JS handling
-                v: row.v ? Number(row.v) : null,
-                c: row.c ? Number(row.c) : null,
-                o: row.o ? Number(row.o) : null,
-                h: row.h ? Number(row.h) : null,
-                l: row.l ? Number(row.l) : null,
-                oi: row.oi ? Number(row.oi) : null,
-                pfr: row.pfr ? Number(row.pfr) : null,
-                lsr: row.lsr ? Number(row.lsr) : null
-            }));
-        } catch (error) {
-            console.error(`Error querying perp_data for perpspec='${perpspec}', symbol='${symbol}':`, error.message);
-            return [];
         }
     }
 

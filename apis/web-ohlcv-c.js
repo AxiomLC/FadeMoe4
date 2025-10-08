@@ -1,387 +1,412 @@
-// web-ohlcv-c.js
-// ------------------------------------------------------------
-// Websocket OHLCV collector for Binance (works), Bybit, OKX
-// - Resilient parsing for each exchange's WS payload shape
-// - Ensures ts is BigInt for DB insertion (record.ts.toString())
-// - Keeps perpspec/source mapping from dynamicSymbols.json
-// - Defensive: ignores subscribe/pong messages; logs parse errors
-// ------------------------------------------------------------
+/* ==========================================
+ * web-ohlcv-c4.js   8 Oct 2025
+ * Continuous WebSocket OHLCV Collector
+ *
+ * Streams 1m candle data from Binance, Bybit, and OKX
+ * Inserts closed candles into the database
+ * Logs status once per minute per exchange
+ * ========================================== */
 
 const WebSocket = require('ws');
-const fs = require('fs');
 const apiUtils = require('../api-utils');
 const dbManager = require('../db/dbsetup');
+const perpList = require('../perp-list');
 require('dotenv').config();
 
-const SCRIPT_NAME = 'web-ohlcv-c.js';
+const SCRIPT_NAME = 'web-ohlcv-c4.js';
 
-// Load dynamic symbols mapping base symbols to exchange-specific symbols
-const dynamicSymbols = JSON.parse(fs.readFileSync('dynamic-symbols.json', 'utf8'));
-
-// Exchange config: maps exchange to DB schema, dynamicSymbols key for API source, and perpspec name
-const EXCHANGES = {
-    binance: { sourceKey: 'bin-ohlcv', perpspec: 'bin-ohlcv' },
-    bybit: { sourceKey: 'byb-ohlcv', perpspec: 'byb-ohlcv' },
-    okx: { sourceKey: 'okx-ohlcv', perpspec: 'okx-ohlcv' }
+/* ==========================================
+ * EXCHANGE CONFIGURATION
+ * ========================================== */
+const EXCHANGE_CONFIG = {
+  BINANCE: {
+    PERPSPEC: 'bin-ohlcv',
+    DB_INTERVAL: '1m',
+    mapSymbol: sym => `${sym.toLowerCase()}usdt`,
+    getWsUrl: sym => `wss://fstream.binance.com/ws/${sym.toLowerCase()}usdt@kline_1m`
+  },
+  BYBIT: {
+    PERPSPEC: 'byb-ohlcv',
+    WS_URL: 'wss://stream.bybit.com/v5/public/linear',
+    DB_INTERVAL: '1m',
+    // Bybit uses 1000X prefix for certain meme coins
+    mapSymbol: sym => {
+      const memeCoins = ['BONK', 'PEPE', 'FLOKI', 'TOSHI'];
+      return memeCoins.includes(sym) ? `1000${sym}USDT` : `${sym}USDT`;
+    },
+    // Reverse mapping for received data
+    unmapSymbol: topic => {
+      const memeCoins = ['BONK', 'PEPE', 'FLOKI', 'TOSHI'];
+      for (const coin of memeCoins) {
+        if (topic === `1000${coin}USDT`) return coin;
+      }
+      return topic.replace('USDT', '');
+    }
+  },
+  OKX: {
+    PERPSPEC: 'okx-ohlcv',
+    WS_URL: 'wss://ws.okx.com:8443/ws/v5/business',
+    DB_INTERVAL: '1m',
+    mapSymbol: sym => `${sym}-USDT-SWAP`
+  }
 };
 
-/**
- * Processes raw candle data from WebSocket and inserts into DB.
- * Sets source and perpspec based on exchange config.
- * Uses baseSymbol as canonical symbol in DB.
- */
+// Track completed symbols per exchange per minute
+const completedSymbols = {
+  'bin-ohlcv': new Set(),
+  'byb-ohlcv': new Set(),
+  'okx-ohlcv': new Set()
+};
+
+// Track Bybit active subscriptions
+const bybitActiveSymbols = new Set();
+
+/* ==========================================
+ * DATA PROCESSING & INSERTION
+ * ========================================== */
+
 async function processAndInsert(exchange, baseSymbol, rawData) {
-    const config = EXCHANGES[exchange];
-    if (!config) {
-        console.error(`Unsupported exchange: ${exchange}`);
-        return;
+  const config = EXCHANGE_CONFIG[exchange];
+  if (!config) return;
+
+  const perpspec = config.PERPSPEC;
+  let record = null;
+//=========================BINANCE=============================
+  try {
+    if (exchange === 'BINANCE') {
+      const k = rawData.k;
+      const ts = apiUtils.toMillis(BigInt(k.t));
+
+      record = {
+        ts,
+        symbol: baseSymbol,
+        source: perpspec,
+        perpspec,
+        interval: config.DB_INTERVAL,
+        o: parseFloat(k.o),
+        h: parseFloat(k.h),
+        l: parseFloat(k.l),
+        c: parseFloat(k.c),
+        v: parseFloat(k.v)
+      };
+//=========================BYBIT===============================
+    } else if (exchange === 'BYBIT') {
+      const k = rawData.data && rawData.data[0];
+      if (!k) return;
+
+      const ts = BigInt(k.start);
+
+      record = {
+        ts,
+        symbol: baseSymbol,
+        source: perpspec,
+        perpspec,
+        interval: config.DB_INTERVAL,
+        o: parseFloat(k.open),
+        h: parseFloat(k.high),
+        l: parseFloat(k.low),
+        c: parseFloat(k.close),
+        v: parseFloat(k.volume || 0)
+      };
+//=========================OKX================================
+    } else if (exchange === 'OKX') {
+      const c = rawData.data && rawData.data[0];
+      if (!c) return;
+
+      const ts = apiUtils.toMillis(BigInt(c[0]));
+      const vol = (c.length > 5 && c[5] !== undefined) ? c[5] : 0;
+
+      record = {
+        ts,
+        symbol: baseSymbol,
+        source: perpspec,
+        perpspec,
+        interval: config.DB_INTERVAL,
+        o: parseFloat(c[1]),
+        h: parseFloat(c[2]),
+        l: parseFloat(c[3]),
+        c: parseFloat(c[4]),
+        v: parseFloat(vol)
+      };
     }
 
-    const symbolValue = dynamicSymbols[baseSymbol]?.[config.sourceKey];
-    if (!symbolValue) {
-        console.warn(`⚠️ No symbol value for ${baseSymbol} ${config.sourceKey}`);
-        return;
+    if (!record) return;
+
+    // Insert into database
+    await dbManager.insertData(perpspec, [record]);
+
+    // Track completion for status logging
+    completedSymbols[perpspec].add(baseSymbol);
+
+    // Log status once all symbols for this exchange complete
+    const expectedCount = (exchange === 'BYBIT') ? bybitActiveSymbols.size : perpList.length;
+    
+    if (completedSymbols[perpspec].size === expectedCount) {
+      const message = `${perpspec} 1min pull for ${expectedCount} symbols`;
+      await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message);
+      console.log(message);
+      completedSymbols[perpspec].clear();
     }
 
-    const apiSource = config.sourceKey;
-    const perpspec = config.perpspec;
-    let record = null;
-    let ts = null;
-
-    try {
-        if (exchange === 'binance') {
-            // existing working code kept intact
-            const k = rawData.k;
-            ts = normalizeTimestamp(k.t);
-            if (!ts) return;
-
-            // ensure BigInt ts
-            ts = BigInt(String(ts));
-
-            record = {
-                ts,
-                symbol: baseSymbol,
-                source: apiSource,
-                perpspec,
-                interval: '1min',
-                o: parseFloat(k.o),
-                h: parseFloat(k.h),
-                l: parseFloat(k.l),
-                c: parseFloat(k.c),
-                v: parseFloat(k.v)
-            };
-        } else if (exchange === 'bybit') {
-            // Bybit V5 kline payload: { topic: "kline.1.BTCUSDT", data: [ { start, end, interval, open, close, high, low, volume, turnover, confirm, timestamp } ] }
-            const k = rawData.data && rawData.data[0];
-            if (!k) {
-                // nothing to do
-                return;
-            }
-
-            // Bybit `start` is already ms per Bybit docs -> do not multiply by 1000
-            ts = normalizeTimestamp(k.start);
-            if (!ts) return;
-            ts = BigInt(String(ts));
-
-            record = {
-                ts,
-                symbol: baseSymbol,
-                source: apiSource,
-                perpspec,
-                interval: '1min',
-                o: parseFloat(k.open),
-                h: parseFloat(k.high),
-                l: parseFloat(k.low),
-                c: parseFloat(k.close),
-                v: parseFloat(k.volume || k.turnover || 0)
-            };
-        } else if (exchange === 'okx') {
-            // OKX WS candle payload: message.arg.instId is instrument; data[0] is an array [ts, o, h, l, c, vol, confirm?]
-            const c = rawData.data && rawData.data[0];
-            if (!c) return;
-
-            // c[0] is timestamp in ms (string or number)
-            ts = normalizeTimestamp(c[0]);
-            if (!ts) return;
-            ts = BigInt(String(ts));
-
-            // Volume index typically at c[5]; confirm flag sometimes at c[6]
-            const vol = (c.length > 5 && c[5] !== undefined) ? c[5] : 0;
-            record = {
-                ts,
-                symbol: baseSymbol,
-                source: apiSource,
-                perpspec,
-                interval: '1min',
-                o: parseFloat(c[1]),
-                h: parseFloat(c[2]),
-                l: parseFloat(c[3]),
-                c: parseFloat(c[4]),
-                v: parseFloat(vol)
-            };
-        } else {
-            console.error(`Unsupported exchange: ${exchange}`);
-            return;
-        }
-
-        await insertRecord(record, exchange, baseSymbol, ts);
-    } catch (e) {
-        console.error(`Error processing candle for ${exchange} ${baseSymbol}:`, e && e.message ? e.message : e);
-    }
+  } catch (error) {
+    await apiUtils.logScriptError(
+      dbManager,
+      SCRIPT_NAME,
+      'INTERNAL',
+      'INSERT_FAILED',
+      error.message,
+      { perpspec, symbol: baseSymbol }
+    );
+  }
 }
 
-/**
- * Normalize timestamp using apiUtils.toMillis.
- * Returns null if error occurs.
- */
-function normalizeTimestamp(ts) {
-    try {
-        return apiUtils.toMillis(ts);
-    } catch (e) {
-        console.error(`⚠️ Timestamp normalization error:`, e && e.message ? e.message : e);
-        return null;
-    }
-}
-
-/**
- * Inserts or updates OHLCV record in the database.
- * Uses UPSERT on (ts, symbol, source) to avoid duplicates.
- * Logs success or error via apiUtils.
- */
-async function insertRecord(record, exchange, baseSymbol, ts) {
-    try {
-        const query = `
-            INSERT INTO perp_data (ts, symbol, source, perpspec, interval, o, h, l, c, v)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ON CONFLICT (ts, symbol, source) DO UPDATE SET
-                o = EXCLUDED.o,
-                h = EXCLUDED.h,
-                l = EXCLUDED.l,
-                c = EXCLUDED.c,
-                v = EXCLUDED.v
-        `;
-
-        await dbManager.pool.query(query, [
-            record.ts.toString(),
-            record.symbol,
-            record.source,
-            record.perpspec,
-            record.interval,
-            record.o,
-            record.h,
-            record.l,
-            record.c,
-            record.v
-        ]);
-
-        await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'success', `Inserted OHLCV for ${baseSymbol} on ${exchange}`, {
-            ts: record.ts.toString()
-        });
-
-        console.log(`✅ ${exchange} ${baseSymbol} OHLCV inserted at ${new Date(Number(record.ts)).toISOString()}`);
-    } catch (error) {
-        console.error(`❌ DB insert error for ${exchange} ${baseSymbol}:`, error && error.message ? error.message : error);
-        await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'DB', 'INSERT_ERROR', error && error.message ? error.message : error, {
-            exchange,
-            symbol: baseSymbol
-        });
-    }
-}
-
-/**
- * Starts Binance WebSocket connections for all symbols with 'bin-ohlcv' key.
- * Subscribes to 1m kline streams.
- */
+/* ==========================================
+ * BINANCE WEBSOCKET
+ * One connection per symbol
+ * ========================================== */
 async function binanceWebSocket() {
-    try {
-        const symbols = Object.keys(dynamicSymbols).filter(sym => dynamicSymbols[sym].hasOwnProperty('bin-ohlcv'));
-        symbols.forEach(baseSymbol => {
-            const wsSymbol = dynamicSymbols[baseSymbol]['bin-ohlcv'];
-            const ws = new WebSocket(`wss://fstream.binance.com/ws/${wsSymbol.toLowerCase()}@kline_1m`);
+  for (const baseSymbol of perpList) {
+    const config = EXCHANGE_CONFIG.BINANCE;
+    const wsUrl = config.getWsUrl(baseSymbol);
 
-            ws.on('open', () => {
-                console.log(`Binance websocket opened for ${baseSymbol}`);
-            });
+    const ws = new WebSocket(wsUrl);
 
-            ws.on('message', async (data) => {
-                try {
-                    const message = JSON.parse(data);
-                    if (message.k && message.k.x) {
-                        await processAndInsert('binance', baseSymbol, message);
-                        console.log(`✅ Binance ${baseSymbol} candle closed at ${new Date(Number(message.k.t)).toISOString()}`);
-                    }
-                } catch (e) {
-                    console.error(`Binance message parse error for ${baseSymbol}:`, e && e.message ? e.message : e);
-                }
-            });
+    ws.on('message', async (data) => {
+      try {
+        const message = JSON.parse(data);
+        if (message.k && message.k.x) {
+          await processAndInsert('BINANCE', baseSymbol, message);
+        }
+      } catch (error) {
+        await apiUtils.logScriptError(
+          dbManager,
+          SCRIPT_NAME,
+          'API',
+          'PARSE_ERROR',
+          error.message,
+          { perpspec: config.PERPSPEC, symbol: baseSymbol }
+        );
+      }
+    });
 
-            ws.on('error', (error) => {
-                console.error(`Binance WebSocket error for ${baseSymbol}:`, error && error.message ? error.message : error);
-                setTimeout(binanceWebSocket, 5000);
-            });
+    ws.on('error', async (error) => {
+      await apiUtils.logScriptError(
+        dbManager,
+        SCRIPT_NAME,
+        'API',
+        'WEBSOCKET_ERROR',
+        error.message,
+        { perpspec: config.PERPSPEC, symbol: baseSymbol }
+      );
+    });
 
-            ws.on('close', () => {
-                console.log(`Binance websocket closed for ${baseSymbol}`);
-            });
-        });
-    } catch (error) {
-        console.error('Binance WebSocket connection error:', error && error.message ? error.message : error);
-        setTimeout(binanceWebSocket, 10000);
-    }
+    ws.on('close', () => {
+      setTimeout(() => binanceWebSocket(), 5000);
+    });
+  }
 }
 
-/**
- * Starts Bybit WebSocket connection subscribing to all symbols with 'byb-ohlcv' key.
- */
+/* ==========================================
+ * BYBIT WEBSOCKET 
+ * CRITICAL: Bybit requires individual subscriptions per symbol.
+ * Batch subscriptions with invalid symbols cause fail. Subscribing individually allows
+ * valid symbols to work while gracefully handling invalid ones.
+ * 
+ * Symbol Naming: Bybit uses "1000X" prefix forsome meme coins e.g., BONK → 1000BONKUSDT)
+ * ========================================== */
 async function bybitWebSocket() {
-    try {
-        const symbols = Object.keys(dynamicSymbols).filter(sym => dynamicSymbols[sym].hasOwnProperty('byb-ohlcv'));
-        if (symbols.length === 0) {
-            console.log('No Bybit symbols defined in dynamic-symbols.json');
-            return;
+  const config = EXCHANGE_CONFIG.BYBIT;
+  const ws = new WebSocket(config.WS_URL);
+  let isConnected = false;
+
+  ws.on('open', () => {
+    isConnected = true;
+    
+    // Subscribe to each symbol individually
+    perpList.forEach((sym, index) => {
+      const bybitSymbol = config.mapSymbol(sym);
+      const subscribeMsg = {
+        op: 'subscribe',
+        args: [`kline.1.${bybitSymbol}`]
+      };
+      
+      // Stagger subscriptions to avoid rate limits
+      setTimeout(() => {
+        if (isConnected) {
+          ws.send(JSON.stringify(subscribeMsg));
         }
+      }, index * 50);
+    });
+  });
 
-        const ws = new WebSocket('wss://stream.bybit.com/v5/public/linear');
+  ws.on('message', async (data) => {
+    try {
+      const message = JSON.parse(data);
 
-        ws.on('open', () => {
-            const args = symbols.map(sym => `kline.1.${dynamicSymbols[sym]['byb-ohlcv']}`);
-            ws.send(JSON.stringify({ op: 'subscribe', args }));
-            console.log(`Bybit websocket subscribed to: ${args.join(', ')}`);
-        });
+      // Handle subscription responses
+      if (message.op === 'subscribe') {
+        if (!message.success) {
+          const failedTopic = message.ret_msg || '';
+          console.log(`⚠️  Bybit subscription failed: ${failedTopic}`);
+        }
+        return;
+      }
 
-        ws.on('message', async (data) => {
-            try {
-                const message = JSON.parse(data);
+      // Handle ping/pong
+      if (message.op === 'ping') {
+        ws.send(JSON.stringify({ op: 'pong' }));
+        return;
+      }
 
-                // ignore non-data messages (subscribe ack, heartbeats)
-                if (!message.data || !Array.isArray(message.data) || message.data.length === 0) return;
+      // Validate data exists
+      if (!message.data || !Array.isArray(message.data) || message.data.length === 0) {
+        return;
+      }
 
-                // topic contains the symbol: "kline.1.BTCUSDT"
-                const topic = message.topic || '';
-                const topicParts = topic.split('.');
-                const symbolFromTopic = topicParts[2]; // BTCUSDT
+      // Extract symbol from topic
+      const topic = message.topic || '';
+      if (!topic.startsWith('kline.1.')) return;
+      
+      const bybitSymbol = topic.split('.')[2];
+      const baseSymbol = config.unmapSymbol(bybitSymbol);
 
-                // find baseSymbol mapping from dynamicSymbols
-                const baseSymbol = Object.keys(dynamicSymbols).find(sym => dynamicSymbols[sym]['byb-ohlcv'] === symbolFromTopic);
-                if (!baseSymbol) return;
+      // Track active symbols (ones we're receiving data for)
+      if (!bybitActiveSymbols.has(baseSymbol)) {
+        bybitActiveSymbols.add(baseSymbol);
+      }
 
-                // Bybit data is an array, take the first kline object
-                const kline = message.data[0];
-                // confirm === true means candle closed (per Bybit docs)
-                if (kline && (kline.confirm === true)) {
-                    // pass the whole message so processAndInsert sees the expected structure
-                    await processAndInsert('bybit', baseSymbol, message);
-                    // kline.start is ms (no multiply)
-                    console.log(`✅ Bybit ${baseSymbol} candle closed at ${new Date(Number(kline.start)).toISOString()}`);
-                }
-            } catch (e) {
-                console.error('Bybit message parse error:', e && e.message ? e.message : e);
-            }
-        });
+      const kline = message.data[0];
+      
+      // CRITICAL: Only confirmed (closed) candles
+      // Bybit sends confirm=false for in-progress candles
+      // and confirm=true when the candle period completes
+      if (kline && kline.confirm === true) {
+        await processAndInsert('BYBIT', baseSymbol, message);
+      }
 
-        ws.on('error', (error) => {
-            console.error('Bybit WebSocket error:', error && error.message ? error.message : error);
-            setTimeout(bybitWebSocket, 5000);
-        });
-
-        ws.on('close', () => {
-            console.log('Bybit websocket connection closed');
-        });
     } catch (error) {
-        console.error('Bybit WebSocket connection error:', error && error.message ? error.message : error);
-        setTimeout(bybitWebSocket, 10000);
+      await apiUtils.logScriptError(
+        dbManager,
+        SCRIPT_NAME,
+        'API',
+        'PARSE_ERROR',
+        error.message,
+        { perpspec: config.PERPSPEC }
+      );
     }
+  });
+
+  ws.on('error', async (error) => {
+    await apiUtils.logScriptError(
+      dbManager,
+      SCRIPT_NAME,
+      'API',
+      'WEBSOCKET_ERROR',
+      error.message,
+      { perpspec: config.PERPSPEC }
+    );
+  });
+
+  ws.on('close', () => {
+    isConnected = false;
+    bybitActiveSymbols.clear();
+    setTimeout(() => bybitWebSocket(), 5000);
+  });
 }
 
-/**
- * Starts OKX WebSocket connection subscribing to all symbols with 'okx-ohlcv' key.
- * Now uses 'candle1m' channel for trade candles (includes volume).
- */
+/* ==========================================
+ * OKX WEBSOCKET
+ * Single connection, multiple subscriptions
+ * ========================================== */
 async function okxWebSocket() {
+  const config = EXCHANGE_CONFIG.OKX;
+  const ws = new WebSocket(config.WS_URL);
+
+  ws.on('open', () => {
+    const args = perpList.map(sym => ({
+      channel: 'candle1m',
+      instId: config.mapSymbol(sym)
+    }));
+    ws.send(JSON.stringify({ op: 'subscribe', args }));
+  });
+
+  ws.on('message', async (data) => {
     try {
-        const symbols = Object.keys(dynamicSymbols).filter(sym => dynamicSymbols[sym].hasOwnProperty('okx-ohlcv'));
-        if (symbols.length === 0) {
-            console.log('No OKX symbols defined in dynamic-symbols.json');
-            return;
-        }
+      const message = JSON.parse(data);
 
-        // Using public endpoint for trade candles (candle1m)
-        const ws = new WebSocket('wss://ws.okx.com:8443/ws/v5/business');
+      if (!message.data || !Array.isArray(message.data) || message.data.length === 0) return;
 
-        ws.on('open', () => {
-            // Subscribe to candle1m channel (trade candles with volume)
-            const args = symbols.map(sym => ({ 
-                channel: 'candle1m', 
-                instId: dynamicSymbols[sym]['okx-ohlcv'] 
-            }));
-            ws.send(JSON.stringify({ op: 'subscribe', args }));
-            console.log(`OKX websocket subscribed to candle1m: ${args.map(a => a.instId).join(', ')}`);
-        });
+      const instId = message.arg && message.arg.instId;
+      if (!instId) return;
 
-        ws.on('message', async (data) => {
-            try {
-                const message = JSON.parse(data);
+      const baseSymbol = perpList.find(sym => config.mapSymbol(sym) === instId);
+      if (!baseSymbol) return;
 
-                // Ignore non-data messages (subscribe confirmations, etc.)
-                if (!message.data || !Array.isArray(message.data) || message.data.length === 0) return;
+      const c = message.data[0];
+      const confirm = (c.length > 8) ? c[8] : undefined;
 
-                // message.arg.instId is the instrument id (e.g. BTC-USDT-SWAP)
-                const instId = message.arg && message.arg.instId;
-                if (!instId) return;
-
-                // Locate baseSymbol by matching dynamicSymbols[*]['okx-ohlcv'] === instId
-                const baseSymbol = Object.keys(dynamicSymbols).find(sym => dynamicSymbols[sym]['okx-ohlcv'] === instId);
-                if (!baseSymbol) return;
-
-                const c = message.data[0];
-                // OKX candle1m array format: [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
-                // c[5] = volume in contracts
-                // c[8] = confirm boolean (true = candle closed)
-                const confirm = (c.length > 8) ? c[8] : undefined;
-                
-                // Only process closed candles (confirm === "1" as string or true as boolean)
-                if (confirm === "1" || confirm === true) {
-                    await processAndInsert('okx', baseSymbol, message);
-                    console.log(`✅ OKX ${baseSymbol} candle closed at ${new Date(Number(c[0])).toISOString()}`);
-                }
-            } catch (e) {
-                console.error('OKX message parse error:', e && e.message ? e.message : e);
-            }
-        });
-
-        ws.on('error', (error) => {
-            console.error('OKX WebSocket error:', error && error.message ? error.message : error);
-            setTimeout(okxWebSocket, 5000);
-        });
-
-        ws.on('close', () => {
-            console.log('OKX websocket connection closed');
-        });
+      if (confirm === "1" || confirm === true) {
+        await processAndInsert('OKX', baseSymbol, message);
+      }
     } catch (error) {
-        console.error('OKX WebSocket connection error:', error && error.message ? error.message : error);
-        setTimeout(okxWebSocket, 10000);
+      await apiUtils.logScriptError(
+        dbManager,
+        SCRIPT_NAME,
+        'API',
+        'PARSE_ERROR',
+        error.message,
+        { perpspec: config.PERPSPEC }
+      );
     }
+  });
+
+  ws.on('error', async (error) => {
+    await apiUtils.logScriptError(
+      dbManager,
+      SCRIPT_NAME,
+      'API',
+      'WEBSOCKET_ERROR',
+      error.message,
+      { perpspec: config.PERPSPEC }
+    );
+  });
+
+  ws.on('close', () => {
+    setTimeout(() => okxWebSocket(), 5000);
+  });
 }
 
-/**
- * Starts all WebSocket connections for Binance, Bybit, and OKX.
- */
-async function startAllConnections() {
-    console.log('🚀 Starting all websocket OHLCV connections...');
-    binanceWebSocket();
-    bybitWebSocket();
-    okxWebSocket();
+/* ==========================================
+ * MAIN EXECUTION
+ * ========================================== */
+async function execute() {
+  console.log(`🚀 Starting ${SCRIPT_NAME} - WebSocket OHLCV streaming`);
+
+  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);
+
+  // Start all WebSocket connections
+  binanceWebSocket();
+  bybitWebSocket();
+  okxWebSocket();
+
+  // Graceful shutdown
+  process.on('SIGINT', async () => {
+    console.log(`\n${SCRIPT_NAME} received SIGINT, stopping...`);
+    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', `${SCRIPT_NAME} stopped smoothly`);
+    process.exit(0);
+  });
 }
 
-module.exports = { execute: startAllConnections };
-
+/* ==========================================
+ * MODULE ENTRY POINT
+ * ========================================== */
 if (require.main === module) {
-    startAllConnections()
-        .then(() => {
-            console.log('🏁 web-ohlcv-c.js started successfully, websockets running');
-        })
-        .catch(error => {
-            console.error('💥 web-ohlcv-c.js failed:', error && error.message ? error.message : error);
-            process.exit(1);
-        });
+  execute()
+    .catch(err => {
+      console.error('💥 WebSocket OHLCV streaming failed:', err);
+      apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'SYSTEM', 'INITIALIZATION_FAILED', err.message);
+      process.exit(1);
+    });
 }
+
+module.exports = { execute };

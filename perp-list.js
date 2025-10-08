@@ -3,5 +3,23 @@
 
 module.exports = [
     'ETH',
-    'BNB',
+    'XRP',
+    'HYPE',
+    'DOGE',
+    'BTC',
+    'XPL',
+    'PUMP',
+    'SPX',
+    'IP',
+    'ASTER',
+    'ONDO',
+    'SUI',
+    'KAITO',
+    'PROMPT',
+    'ORDER',
+    'ANIME',
+    'ARKM',
+    'FARTCOIN',
+    'SOL',
+
 ];

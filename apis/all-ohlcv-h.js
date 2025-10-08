@@ -2,6 +2,8 @@
 // Unified OHLCV Backfill Script for Binance, Bybit, and OKX
 // Optimized for maximum speed - no DB checks, no schema validation
 // Direct fetch → process → insert with ON CONFLICT DO NOTHING
+// MT Creation: Average closes from MT_SYMBOLS, insert as 'MT' under 'bin-ohlcv'
+// Simplified logging: Success/error only
 
 const axios = require('axios');
 const dbManager = require('../db/dbsetup');
@@ -21,19 +23,37 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Retry utility for rate limits
+async function fetchWithRetry(url, options, maxRetries = 1) {
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    try {
+      return await axios.get(url, options);
+    } catch (error) {
+      if (error.response?.status === 429 && attempt <= maxRetries) {
+        await sleep(200); // Short sleep for limit
+      } else {
+        throw error;
+      }
+    }
+  }
+}
+
+// Target old ts (now - 10 days)
+function getTargetOldTs() {
+  return Date.now() - DAYS_TO_FETCH * 24 * 60 * 60 * 1000;
+}
+
 // ============================================================================
 // EXCHANGE CONFIGURATIONS
-// ⚡ SPEED SETTINGS: Adjust concurrency, rateDelay, and limit for optimal performance
-// ============================================================================
-
+// ⚡ SPEED SETTINGS: OKX concurrency=6 (faster bursts under limit)
 const EXCHANGES = {
   BINANCE: {
     perpspec: 'bin-ohlcv',
     source: 'bin-ohlcv',
     url: 'https://fapi.binance.com/fapi/v1/klines',
-    limit: 1000,              // ⚡ Max 1000 = weight 5 per request (1500 = weight 10)
-    rateDelay: 200,           // ⚡ Milliseconds between requests
-    concurrency: 3,           // ⚡ Parallel symbol processing
+    limit: 1000,              // Max 1000
+    rateDelay: 200,           // Delay between requests
+    concurrency: 3,           // Parallel symbols
     timeout: 10000,
     apiInterval: '1m',
     dbInterval: '1m',
@@ -44,9 +64,9 @@ const EXCHANGES = {
     perpspec: 'byb-ohlcv',
     source: 'byb-ohlcv',
     url: 'https://api.bybit.com/v5/market/kline',
-    limit: 1000,              // ⚡ Max candles per request
-    rateDelay: 200,           // ⚡ Milliseconds between requests
-    concurrency: 3,           // ⚡ Parallel symbol processing
+    limit: 1000,              // Max 1000
+    rateDelay: 200,           // Delay between requests
+    concurrency: 3,           // Parallel symbols
     timeout: 10000,
     apiInterval: '1',
     dbInterval: '1m',
@@ -56,10 +76,10 @@ const EXCHANGES = {
   OKX: {
     perpspec: 'okx-ohlcv',
     source: 'okx-ohlcv',
-    url: 'https://www.okx.com/api/v5/market/history-candles',
-    limit: 100,               // ⚡ Max candles per request (OKX limitation)
-    rateDelay: 100,           // ⚡ Milliseconds between requests
-    concurrency: 3,           // ⚡ Parallel symbol processing
+    url: 'https://www.okx.com/api/v5/market/history-mark-price-candles',
+    limit: 100,               // Max 100
+    rateDelay: 100,           // Delay between requests (under 20/2s limit)
+    concurrency: 6,           // Parallel symbols (6 bursts ~6/sec, under 10/sec)
     timeout: 10000,
     apiInterval: '1m',
     dbInterval: '1m',
@@ -69,7 +89,14 @@ const EXCHANGES = {
 };
 
 // ============================================================================
-// FETCH FUNCTIONS
+// MT CONFIGURATION
+// ============================================================================
+
+const MT_SYMBOLS = ['ETH', 'BTC', 'DOGE', 'XRP', 'SOL']; // Dynamic: Add/remove symbols here; avg = sum / length
+const MT_SYMBOL = 'MT'; // Insert as this symbol under 'bin-ohlcv'
+
+// ============================================================================
+// FETCH FUNCTIONS (OKX Optimized: Prepend, after = oldest - 1ms, early break)
 // ============================================================================
 
 //=================BINANCE========================================
@@ -96,15 +123,14 @@ async function fetchBinanceOHLCV(symbol, config) {
 
       allCandles.push(...data);
 
-      // Move startTime to 1ms after the last candle's openTime
       const lastCandleTime = data[data.length - 1][0];
-      startTime = lastCandleTime + 60000; // Move to next 1m candle
+      startTime = lastCandleTime + 60000;
 
       if (data.length < config.limit) break;
 
       await sleep(config.rateDelay);
     } catch (error) {
-      console.error(`[${config.perpspec}] Fetch error for ${symbol}:`, error.message);
+      console.error(`❌ [${config.perpspec}] ${symbol}: ${error.message}`);
       throw error;
     }
   }
@@ -141,7 +167,7 @@ async function fetchBybitOHLCV(symbol, config) {
 
       await sleep(config.rateDelay);
     } catch (error) {
-      console.error(`[${config.perpspec}] Fetch error for ${symbol}:`, error.message);
+      console.error(`❌ [${config.perpspec}] ${symbol}: ${error.message}`);
       throw error;
     }
   }
@@ -153,30 +179,45 @@ async function fetchBybitOHLCV(symbol, config) {
 async function fetchOKXOHLCV(symbol, config) {
   const totalCandles = DAYS_TO_FETCH * 1440;
   const totalRequests = Math.ceil(totalCandles / config.limit);
-
   let allCandles = [];
-  let after = null;
+  let after = null; // Initial: null for latest 100
+
+  const targetOldTs = getTargetOldTs(); // Now - 10 days
 
   for (let i = 0; i < totalRequests; i++) {
     let url = `${config.url}?instId=${symbol}&bar=${config.apiInterval}&limit=${config.limit}`;
-    if (after) url += `&after=${after}`;
+    if (after !== null) url += `&after=${after}`; // After for earlier than ts
 
     try {
-      const response = await axios.get(url, { timeout: config.timeout });
+      const response = await fetchWithRetry(url, { timeout: config.timeout }, 1);
       const data = response.data;
 
-      if (data.code !== '0' || !data.data || data.data.length === 0) break;
+      if (data.code !== '0' || !data.data || data.data.length === 0) {
+        console.error(`❌ [${config.perpspec}] ${symbol}: Empty response (code: ${data.code || 'unknown'})`);
+        break;
+      }
 
-      allCandles.push(...data.data);
+      // Prepend (response is newest first; prepend for backward chronological build)
+      allCandles = [...data.data, ...allCandles];
 
-      after = data.data[data.data.length - 1][0];
+      // Update after to oldest ts from this batch - 1ms (for next earlier batch)
+      const oldestTs = parseInt(data.data[data.data.length - 1][0]) - 1;
+      after = oldestTs;
 
-      if (allCandles.length >= totalCandles) break;
+      // Break if batch < limit or oldest < target old
+      if (data.data.length < config.limit || oldestTs < targetOldTs) {
+        break;
+      }
 
       await sleep(config.rateDelay);
     } catch (error) {
-      console.error(`[${config.perpspec}] Fetch error for ${symbol}:`, error.message);
-      throw error;
+      console.error(`❌ [${config.perpspec}] ${symbol}: ${error.message}`);
+      if (error.response?.status === 429) {
+        await sleep(200);
+        i--; // Retry
+      } else {
+        throw error;
+      }
     }
   }
 
@@ -269,6 +310,75 @@ function processOKXData(rawCandles, baseSymbol, config) {
 }
 
 // ============================================================================
+// MT CREATION FUNCTION
+// ============================================================================
+// MT Creation: Average 1m closes across MT_SYMBOLS (dynamic count), insert as symbol='MT' under 'bin-ohlcv'
+async function createMTToken() {
+  try {
+    console.log(`Creating MT token from ${MT_SYMBOLS.length} symbols...`);
+    const numSymbols = MT_SYMBOLS.length; // Dynamic count for avg
+
+    // Fetch 1m data for all MT symbols (reuse query style)
+    const mtData = await Promise.all(MT_SYMBOLS.map(async (sym) => {
+      const query = `SELECT ts, c::numeric AS close FROM perp_data WHERE symbol = $1 AND perpspec = $2 AND interval = $3 ORDER BY ts ASC`;
+      const result = await dbManager.pool.query(query, [sym, 'bin-ohlcv', '1m']); // Assume bin-ohlcv schema
+      return result.rows.map(row => {
+        const ts = Number(apiUtils.toMillis(BigInt(row.ts))); // Convert BigInt to Number for JS ops
+        const close = parseFloat(row.close);
+        return { ts, close };
+      }).filter(p => !isNaN(p.ts) && !isNaN(p.close) && isFinite(p.close));
+    }));
+
+    if (mtData.some(data => data.length === 0)) {
+      console.error('Missing data for some MT symbols—skipping MT creation');
+      return;
+    }
+
+    // Align by unique ts across all MT data (union ts, forward-fill per symbol)
+    const allTs = [...new Set(mtData.flatMap(data => data.map(p => p.ts)))].sort((a, b) => a - b); // Numbers now
+    const mtRecords = allTs.map(ts => {
+      let totalClose = 0, count = 0;
+      for (const data of mtData) {
+        // Find closest <= ts (forward-fill)
+        let lastValidClose = null;
+        for (const p of data) {
+          if (p.ts <= ts) lastValidClose = p.close;
+          else break;
+        }
+        if (lastValidClose !== null) {
+          totalClose += lastValidClose;
+          count++;
+        }
+      }
+      const avgClose = count > 0 ? totalClose / count : null; // Dynamic avg
+      if (avgClose === null) return null; // Skip if no valid data
+
+      // Insert as OHLCV (o=h=l=c=avg, v=0 or sum if you fetch volume)
+      return {
+        ts: BigInt(Math.round(ts)), // Back to BigInt for DB insert
+        symbol: MT_SYMBOL,
+        source: 'bin-ohlcv', // Match schema
+        perpspec: 'bin-ohlcv',
+        interval: '1m',
+        o: avgClose, h: avgClose, l: avgClose, c: avgClose, v: 0 // v=0 or sum if you fetch volume
+      };
+    }).filter(record => record !== null);
+
+    if (mtRecords.length === 0) {
+      console.error('No MT records generated—skipping insert');
+      return;
+    }
+
+    // Bulk insert with ON CONFLICT DO NOTHING (fills gaps, skips duplicates)
+    await dbManager.insertData('bin-ohlcv', mtRecords);
+    console.log(`✅ Created ${mtRecords.length} MT records under 'bin-ohlcv'`);
+  } catch (error) {
+    console.error('❌ MT creation failed:', error.message);
+    // Optional: Log via apiUtils if needed
+  }
+}
+
+// ============================================================================
 // MAIN BACKFILL FUNCTION
 // ============================================================================
 
@@ -285,11 +395,11 @@ async function backfill() {
     SCRIPT_NAME,
     'running',
     `${SCRIPT_NAME} backfill`
-);
+  );
   await apiUtils.logScriptStatus(
     dbManager,
     SCRIPT_NAME,
-    '🚀started',
+    'started',
     `Starting ${SCRIPT_NAME} backfill for OHLCV data for ${perpspecs}.`
   );
 
@@ -349,7 +459,7 @@ async function backfill() {
           // Determine error type
           const errorCode = error.response?.status === 429 ? 'RATE_LIMIT' :
                            error.message.includes('timeout') ? 'TIMEOUT' :
-                           error.message.includes('404') ? 'NOT_FOUND' : 'FETCH_ERROR';
+                           error.response?.status === 400 || error.response?.status === 404 ? 'INVALID_SYMBOL' : 'FETCH_ERROR';
 
           // Log error
           await apiUtils.logScriptError(
@@ -378,6 +488,9 @@ async function backfill() {
   }
 
   await Promise.all(promises);
+
+  // Create MT token after all individual backfills (ensures data loaded)
+  await createMTToken();
 
   // STATUS #3: Complete per exchange
   for (const exKey of Object.keys(EXCHANGES)) {

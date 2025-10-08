@@ -1,0 +1,90 @@
+### Normalization Strategy for Binance, OKX, and Bybit Responses
+
+To make these APIs usable in your perp analysis AI backtester trading bot, normalize them into consistent, aggregated data for sentiment/imbalance analysis (e.g., taker buy/sell volumes as proxies for long/short aggression). This enables features like ratio-based signals for liquidation prediction or momentum detection.
+
+The goal: Store per-symbol, per-5min-interval aggregates in your DB. Why 5min? It's Binance's minimum interval (no 1m support), so align everything to it for comparability. User's note on "insert 5x for 1m" is a misunderstanding—Binance's `buyVol`/`sellVol` are already aggregated over the full 5m period (not 1m x5); duplicating would inflate volumes inaccurately. Instead, fetch/process at 5min native for Binance, and aggregate 5min windows for OKX/Bybit (which provide granular trades).
+
+#### Proposed DB Columns (1-2 New Columns)
+Add **two new columns** to your existing liquidation table (or a new `taker_volume` table linked by `symbol`, `ts`):
+1. `taker_buy_vol`: Float – Aggregated taker buy volume (sum of quantities where side is 'buy' or equivalent) over the 5min interval. Proxies long aggression.
+2. `taker_sell_vol`: Float – Aggregated taker sell volume (sum of quantities where side is 'sell') over the 5min interval. Proxies short aggression.
+
+- Why two columns? Allows computing ratios (`buy/sell`) on-the-fly in queries, or deriving imbalances (e.g., buy_vol - sell_vol for net flow). If space is tight, use one column for `taker_buy_sell_ratio` (buy_vol / sell_vol), but two is more flexible for AI features (e.g., absolute volumes for scaling signals).
+- Timestamp: Align `ts` to 5min floors (e.g., using `Math.floor(ts / 300000) * 300000` for 5min buckets).
+- Symbol: Normalize to uppercase base (e.g., 'BTC' from 'BTCUSDT').
+- Handling Zero Volumes: Default to 0 if no trades in interval.
+- DB Insertion: Use your `dbManager.insertData` with a new perpspec (e.g., 'taker-vol') or extend existing tables. For backtesting, bulk-insert historical aggregates.
+
+#### Normalization Process for Each Exchange
+Process responses into the above columns. For historical backfilling, use OKX's paginable API; for Bybit, download archives and aggregate offline. For live, poll every 5min and aggregate.
+
+1. **Binance (`/futures/data/takerlongshortRatio`)**:
+   - Direct mapping: Already aggregated taker volumes over 5m.
+   - Normalization Steps:
+     - Fetch with `period="5m"`, `limit=1` for latest, or up to 500 for history (last 30 days).
+     - taker_buy_vol = parseFloat(buyVol)
+     - taker_sell_vol = parseFloat(sellVol)
+     - ts = timestamp (millis, already 5m-aligned)
+     - No need for 5x multiplication—volumes are for the full interval.
+   - Example Normalized Row: { ts: 1583139900000, symbol: 'BTC', taker_buy_vol: 343.9290, taker_sell_vol: 248.5030 }
+
+2. **OKX (`/api/v5/market/history-trades`)**:
+   - Provides individual trades with taker side (`side`: 'buy'/'sell'), size (`sz`), timestamp (`ts`).
+   - Normalization Steps:
+     - Fetch historical trades paginated by `before`/`after` (tradeId), filtering to your `perpList` (e.g., instId='BTC-USDT-SWAP').
+     - Group trades into 5min buckets (floor ts to nearest 5min).
+     - For each bucket: taker_buy_vol = sum(sz where side='buy'), taker_sell_vol = sum(sz where side='sell').
+     - If bucket has <5 trades, it's fine—no artificial multiplication.
+     - Data availability: ~2018+; paginate until desired history.
+   - Example from Response: For a single trade { side: 'sell', sz: '0.00001', ts: '1654161641568' } → Aggregate with others in its 5min window (e.g., add to taker_sell_vol).
+   - To Match Binance: Aggregate to 5min—no screening needed, just group_by time.
+
+3. **Bybit (`/v5/market/recent-trade` or Historical Downloads)**:
+   - Recent API: Individual trades with taker side (`side`: 'Buy'/'Sell'), size (`size`), timestamp (`time`).
+   - No historical API—use website downloads for backtesting (CSV files with same fields, ~2018+).
+   - Normalization Steps:
+     - For live: Poll every 5min, fetch up to 1000 trades, filter to last 5min, aggregate: taker_buy_vol = sum(size where side='Buy'), taker_sell_vol = sum(size where side='Sell').
+     - For historical: Download CSVs, parse, group into 5min buckets, aggregate similarly.
+     - ts = time (millis, floor to 5min).
+     - Aggregation to 5min: Yes, required to match Binance—screen/filter trades to the interval and sum. No need for 5x (that's not applicable).
+   - Example: Similar to OKX—aggregate trades in each 5min window.
+
+#### Implementation Tips for Your Bot
+- **Script Snippet (Node.js Example)**: Use in your `api-utils.js` or a new fetcher:
+  ```javascript:disable-run
+  async function fetchAndNormalizeTakerVolumes(exchange, symbol, startTime, endTime) {
+    let buyVol = 0, sellVol = 0;
+    if (exchange === 'binance') {
+      // Fetch from Binance API
+      const response = await axios.get('https://fapi.binance.com/futures/data/takerlongshortRatio', {
+        params: { symbol: `${symbol}USDT`, period: '5m', startTime, endTime, limit: 1 }
+      });
+      const data = response.data[0];
+      buyVol = parseFloat(data.buyVol);
+      sellVol = parseFloat(data.sellVol);
+    } else if (exchange === 'okx') {
+      // Paginate history-trades, aggregate
+      let trades = []; // Fetch via loop with before/after
+      // ... API calls ...
+      const bucket = {}; // Group by 5min floor(ts / 300000) * 300000
+      trades.forEach(trade => {
+        const key = Math.floor(parseInt(trade.ts) / 300000) * 300000;
+        if (!bucket[key]) bucket[key] = { buy: 0, sell: 0 };
+        if (trade.side === 'buy') bucket[key].buy += parseFloat(trade.sz);
+        else bucket[key].sell += parseFloat(trade.sz);
+      });
+      // Take latest bucket or average
+      buyVol = bucket[Object.keys(bucket)[0]].buy * 1; // No 5x
+      sellVol = bucket[Object.keys(bucket)[0]].sell;
+    } else if (exchange === 'bybit') {
+      // Similar aggregation for recent-trade or parsed CSV
+      // ...
+    }
+    // Insert to DB: await dbManager.insertData('taker-vol', [{ ts: startTime, symbol, taker_buy_vol: buyVol, taker_sell_vol: sellVol }]);
+  }
+  ```
+- **Bot Integration**: Use these columns as ML features (e.g., ratio >1.5 → bullish signal for longs). For backtesting, fetch historical (OKX API + Bybit downloads), normalize to 5min, simulate with your liquidation data.
+- **Edge Cases**: Handle empty intervals (vol=0), align timestamps across exchanges, rate-limit polling (Binance/OKX permissive).
+
+This normalization creates consistent data for your bot's analysis, with Bybit aggregated to 5min for parity. If you need code for a full fetcher, provide more DB details!
+```

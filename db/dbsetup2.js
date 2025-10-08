@@ -83,20 +83,17 @@ class MigrationManager {
         // =========================================================================
         // **1. MANUAL COLUMN ADDITIONS FOR perp_data**
         // =========================================================================
-
-        // **EXAMPLE 1: Add Funding Rate**
-        // **Column Name**: funding_rate
-        // **SQL Type**: NUMERIC(20, 8) - good for precise decimal values
-
-        // await this.addColumnToPerpData('funding_rate', 'NUMERIC(20, 8)');
-
         // **EXAMPLE 2: Add Open Interest (Total number of contracts)**
         // **Column Name**: open_interest
         // **SQL Type**: ---- NUMERIC
-        await this.addColumnToPerpData('oi', 'NUMERIC(20, 8)');
-        await this.addColumnToPerpData('pfr', 'NUMERIC(20, 8)');
-        await this.addColumnToPerpData('lq', 'NUMERIC(20, 8)');
-        await this.addColumnToPerpData('lsr', 'NUMERIC(20, 8)');
+  
+        await this.addColumnToPerpData('lqside', 'VARCHAR(10)');
+        await this.addColumnToPerpData('lqprice', 'NUMERIC(20, 8)');
+        await this.addColumnToPerpData('lqqty', 'NUMERIC(20, 8)');
+        await this.addColumnToPerpData('tbv', 'NUMERIC(20, 8)');
+        await this.addColumnToPerpData('tsv', 'NUMERIC(20, 8)');
+        await this.addColumnToPerpData('rsi1', 'NUMERIC(20, 8)');
+        await this.addColumnToPerpData('rsi60', 'NUMERIC(20, 8)');
 
         // **EXAMPLE 3: Add an Exchange-Specific JSON Field (for non-standard data)**
         // **Column Name**: exchange_data
@@ -114,76 +111,47 @@ class MigrationManager {
 
         // **NOTE:** Core OHLCV schemas ('bin-ohlcv', 'byb-ohlcv', 'okx-ohlcv')
         // should remain in your main dbsetup.js file.
-
-        // **EXAMPLE 1: -----**
-        // **Perpspec Name**: OI
         // **Fields**: Must include all mandatory fields + the new field
-        await this.upsertPerpspecSchema('bin-oi', [
-            'ts', 'symbol', 'source', 'perpspec', 'interval',
-            'oi' // <-- **NEW FIELD HERE**
-        ]);
-        // **EXAMPLE 2: -------**
-        await this.upsertPerpspecSchema('byb-oi', [
-            'ts', 'symbol', 'source', 'perpspec', 'interval',
-            'oi'
-        ]);
-        // **EXAMPLE 3: -------**
-        await this.upsertPerpspecSchema('okx-oi', [
-            'ts', 'symbol', 'source', 'perpspec', 'interval',
-            'oi'
-        ]);
-        //-----------------------------------------------------------------------------------
-
-        // PFR
-        await this.upsertPerpspecSchema('bin-pfr', [
-            'ts', 'symbol', 'source', 'perpspec', 'interval',
-            'pfr' // <-- **NEW FIELD HERE**
-        ]);
-        // **EXAMPLE 2: -------**
-        await this.upsertPerpspecSchema('byb-pfr', [
-            'ts', 'symbol', 'source', 'perpspec', 'interval',
-            'pfr'
-        ]);
-        // **EXAMPLE 3: -------**
-        await this.upsertPerpspecSchema('okx-pfr', [
-            'ts', 'symbol', 'source', 'perpspec', 'interval',
-            'pfr'
-        ]);
-        //-----------------------------------------------------------------------------------
-
-        // ** LQ **
         await this.upsertPerpspecSchema('bin-lq', [
             'ts', 'symbol', 'source', 'perpspec', 'interval',
-            'lq' // <-- **NEW FIELD HERE**
+            'lqside', 'lqprice', 'lqqty' // <-- **NEW FIELD HERE**
         ]);
         // **EXAMPLE 2: -------**
         await this.upsertPerpspecSchema('byb-lq', [
             'ts', 'symbol', 'source', 'perpspec', 'interval',
-            'lq'
+            'lqside', 'lqprice', 'lqqty'
         ]);
         // **EXAMPLE 3: -------**
         await this.upsertPerpspecSchema('okx-lq', [
             'ts', 'symbol', 'source', 'perpspec', 'interval',
-            'lq'
+            'lqside', 'lqprice', 'lqqty'
         ]);
-
-        //-----------------------------------------------------------------------------------
-
-        // ** LSR **
+      
+         //------------------------------------------------------------------
+        await this.upsertPerpspecSchema('bin-tv', [
+            'ts', 'symbol', 'source', 'perpspec', 'interval',
+            'tbv', 'tsv' // <-- **NEW FIELD HERE**
+        ]);
+        // **EXAMPLE 2: -------**
+        await this.upsertPerpspecSchema('byb-tv', [
+            'ts', 'symbol', 'source', 'perpspec', 'interval',
+            'tbv', 'tsv'
+        ]);
+        // **EXAMPLE 3: -------**
+        await this.upsertPerpspecSchema('okx-tv', [
+            'ts', 'symbol', 'source', 'perpspec', 'interval',
+            'tbv', 'tsv'
+        ]);
+        //==========================================================
+        await this.upsertPerpspecSchema('rsi', [
+            'ts', 'symbol', 'source', 'perpspec', 'interval',
+            'rsi1', 'rsi60'
+        ]);
+            /* ** LSR **
         await this.upsertPerpspecSchema('bin-lsr', [
             'ts', 'symbol', 'source', 'perpspec', 'interval',
             'lsr' // <-- **NEW FIELD HERE**
-        ]);
-        // **EXAMPLE 2: -------**
-        await this.upsertPerpspecSchema('byb-lsr', [
-            'ts', 'symbol', 'source', 'perpspec', 'interval',
-            'lsr'
-        ]);
-        // **EXAMPLE 3: -------**
-        await this.upsertPerpspecSchema('okx-lsr', [
-            'ts', 'symbol', 'source', 'perpspec', 'interval',
-            'lsr'
-        ]);
+        */
 
         // **-- ADD NEW SCHEMAS ABOVE THIS LINE --**
         // =========================================================================

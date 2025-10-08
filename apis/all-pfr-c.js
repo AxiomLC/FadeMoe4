@@ -288,7 +288,7 @@ async function pollAllSymbols() {
 
 async function execute() {
   // Simplified start message for console
-  console.log(`🚀 Starting ${SCRIPT_NAME}`);
+  console.log(`🚀 Starting ${SCRIPT_NAME} - Continuous Predicted FR polling`);
   // #1 Log script start ONCE
   // Status: "started", Message: "{scriptName} connected"
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);
@@ -301,7 +301,7 @@ async function execute() {
   // Log completion status for each perpspec after the initial poll cycle
   // Status: "running", Message: "{perpspec} 1min pull complete"
   for (const perpspec of perpspecs) {
-    const message = `${perpspec} 1min pull complete`;
+    const message = `${perpspec} 1min pfr pull`;
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message);
     console.log(message); // Console output matches DB message
   }
@@ -312,7 +312,7 @@ async function execute() {
       await pollAllSymbols();
       // Log completion status for each perpspec after each polling cycle
       for (const perpspec of perpspecs) {
-        const message = `${perpspec} 1min pull complete`;
+        const message = `${perpspec} 1min pfr pull complete`;
         await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message);
         console.log(message); // Console output matches DB message
     }

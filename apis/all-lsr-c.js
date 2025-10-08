@@ -1,8 +1,9 @@
 /* ==========================================
- * all-oi-c.js   5 OCt 2025
- * Continuous Open Interest Polling Script
+ * all-lsr-c.js   6 Oct 2025
+ * Continuous Long/Short Ratio Polling Script
  *
- * Fetches open interest data from Binance, Bybit, and OKX
+ * Fetches LSR data from Binance, Bybit, and OKX
+ * Expands 5m candles to 5 x 1m records
  * Inserts data into the database
  * Logs high-level status messages for UI and monitoring
  * ========================================== */
@@ -13,7 +14,7 @@ const dbManager = require('../db/dbsetup');
 const perpList = require('../perp-list');
 require('dotenv').config();
 
-const SCRIPT_NAME = 'all-oi-c.js';
+const SCRIPT_NAME = 'all-lsr-c.js';
 const POLL_INTERVAL = 60 * 1000; // 1 minute
 
 /* ==========================================
@@ -22,21 +23,24 @@ const POLL_INTERVAL = 60 * 1000; // 1 minute
  * ========================================== */
 const EXCHANGE_CONFIG = {
   BINANCE: {
-    PERPSPEC: 'bin-oi',
-    URL: 'https://fapi.binance.com/fapi/v1/openInterest',
+    PERPSPEC: 'bin-lsr',
+    URL: 'https://fapi.binance.com/futures/data/globalLongShortAccountRatio',
     DB_INTERVAL: '1m',
+    API_INTERVAL: '5m',
     mapSymbol: sym => `${sym}USDT`
   },
   BYBIT: {
-    PERPSPEC: 'byb-oi',
-    URL: 'https://api.bybit.com/v5/market/open-interest',
+    PERPSPEC: 'byb-lsr',
+    URL: 'https://api.bybit.com/v5/market/account-ratio',
     DB_INTERVAL: '1m',
+    API_INTERVAL: '5min',
     mapSymbol: sym => `${sym}USDT`
   },
   OKX: {
-    PERPSPEC: 'okx-oi',
-    URL: 'https://www.okx.com/api/v5/public/open-interest',
+    PERPSPEC: 'okx-lsr',
+    URL: 'https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract',
     DB_INTERVAL: '1m',
+    API_INTERVAL: '5m',
     mapSymbol: sym => `${sym}-USDT-SWAP`
   }
 };
@@ -44,54 +48,30 @@ const EXCHANGE_CONFIG = {
 /* ==========================================
  * DATA PROCESSING FUNCTIONS
  * Parse raw API data into normalized records
+ * Expand 5m candles to 5 x 1m records
  * ========================================== */
 
 /**
- * Process Binance Open Interest snapshot
- * Returns normalized record or null if invalid
+ * Process Binance LSR snapshot
+ * Returns array of 5 x 1m records expanded from 5m candle
  */
 function processBinanceData(rawData, baseSymbol, config) {
-  const perpspec = config.PERPSPEC;
-
-  try {
-    const oi = parseFloat(rawData.openInterest);
-    const timestamp = rawData.time;
-
-    if (isNaN(oi)) {
-      return null;
-    }
-
-    return {
-      ts: apiUtils.toMillis(BigInt(timestamp)),
-      symbol: baseSymbol,
-      source: perpspec,
-      perpspec,
-      interval: config.DB_INTERVAL,
-      oi
-    };
-  } catch (e) {
-    return null;
-  }
-}
-
-/**
- * Process Bybit Open Interest snapshot
- * Expands 5m data to 5 x 1m records
- * Returns array of normalized records or null if invalid
- */
-function processBybitData(rawData, baseSymbol, config) {
   const perpspec = config.PERPSPEC;
   const expandedRecords = [];
 
   try {
-    const dataPoint = rawData.list[0];
-    const oi = parseFloat(dataPoint.openInterest);
-    const timestamp = parseInt(dataPoint.timestamp, 10);
+    // Binance returns array, take the latest (most recent) record
+    const dataPoint = rawData[rawData.length - 1];
+    if (!dataPoint) return null;
 
-    if (isNaN(oi)) {
+    const timestamp = dataPoint.timestamp;
+    const lsr = parseFloat(dataPoint.longShortRatio);
+
+    if (isNaN(lsr)) {
       return null;
     }
 
+    // Expand 5m candle to 5 x 1m records
     for (let i = 0; i < 5; i++) {
       expandedRecords.push({
         ts: apiUtils.toMillis(BigInt(timestamp + i * 60 * 1000)),
@@ -99,7 +79,7 @@ function processBybitData(rawData, baseSymbol, config) {
         source: perpspec,
         perpspec: perpspec,
         interval: config.DB_INTERVAL,
-        oi
+        lsr
       });
     }
 
@@ -110,29 +90,80 @@ function processBybitData(rawData, baseSymbol, config) {
 }
 
 /**
- * Process OKX Open Interest snapshot
- * Returns normalized record or null if invalid
+ * Process Bybit LSR snapshot
+ * Returns array of 5 x 1m records expanded from 5m candle
  */
-function processOkxData(rawData, baseSymbol, config) {
+function processBybitData(rawData, baseSymbol, config) {
   const perpspec = config.PERPSPEC;
+  const expandedRecords = [];
 
   try {
-    const dataPoint = rawData[0];
-    const oi = parseFloat(dataPoint.oi);
-    const timestamp = dataPoint.ts;
+    // Bybit returns nested structure
+    const dataPoint = rawData.list[0];
+    if (!dataPoint) return null;
 
-    if (isNaN(oi)) {
+    const timestamp = parseInt(dataPoint.timestamp, 10);
+    const buyRatio = parseFloat(dataPoint.buyRatio);
+    const sellRatio = parseFloat(dataPoint.sellRatio);
+
+    // Calculate LSR: buyRatio / sellRatio
+    if (isNaN(buyRatio) || isNaN(sellRatio) || sellRatio === 0) {
       return null;
     }
 
-    return {
-      ts: apiUtils.toMillis(BigInt(timestamp)),
-      symbol: baseSymbol,
-      source: perpspec,
-      perpspec,
-      interval: config.DB_INTERVAL,
-      oi
-    };
+    const lsr = buyRatio / sellRatio;
+
+    // Expand 5m candle to 5 x 1m records
+    for (let i = 0; i < 5; i++) {
+      expandedRecords.push({
+        ts: apiUtils.toMillis(BigInt(timestamp + i * 60 * 1000)),
+        symbol: baseSymbol,
+        source: perpspec,
+        perpspec: perpspec,
+        interval: config.DB_INTERVAL,
+        lsr
+      });
+    }
+
+    return expandedRecords;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Process OKX LSR snapshot
+ * Returns array of 5 x 1m records expanded from 5m candle
+ */
+function processOkxData(rawData, baseSymbol, config) {
+  const perpspec = config.PERPSPEC;
+  const expandedRecords = [];
+
+  try {
+    // OKX returns array of arrays, take first (most recent) record
+    const dataPoint = rawData[0];
+    if (!dataPoint) return null;
+
+    const timestamp = parseInt(dataPoint[0]);
+    const lsr = parseFloat(dataPoint[1]);
+
+    if (isNaN(lsr)) {
+      return null;
+    }
+
+    // Expand 5m candle to 5 x 1m records
+    for (let i = 0; i < 5; i++) {
+      expandedRecords.push({
+        ts: apiUtils.toMillis(BigInt(timestamp + i * 60 * 1000)),
+        symbol: baseSymbol,
+        source: perpspec,
+        perpspec: perpspec,
+        interval: config.DB_INTERVAL,
+        lsr
+      });
+    }
+
+    return expandedRecords;
   } catch (e) {
     return null;
   }
@@ -140,32 +171,41 @@ function processOkxData(rawData, baseSymbol, config) {
 
 /* ==========================================
  * EXCHANGE-SPECIFIC FETCH FUNCTIONS
- * Fetch current open interest data from each exchange API
+ * Fetch current LSR data from each exchange API
  * ========================================== */
 
-async function fetchBinanceOI(symbol, config) {
-  const params = { symbol: symbol };
-  const response = await axios.get(config.URL, { params, timeout: 5000 });
-  return response.data;
-}
-
-async function fetchBybitOI(symbol, config) {
+async function fetchBinanceLSR(symbol, config) {
   const params = {
-    category: 'linear',
     symbol: symbol,
-    intervalTime: '5min',
+    period: config.API_INTERVAL,
     limit: 1
   };
 
   const response = await axios.get(config.URL, { params, timeout: 5000 });
-  if (response.data.result?.list?.length === 0) {
+  return response.data;
+}
+
+async function fetchBybitLSR(symbol, config) {
+  const params = {
+    category: 'linear',
+    symbol: symbol,
+    period: config.API_INTERVAL,
+    limit: 1
+  };
+
+  const response = await axios.get(config.URL, { params, timeout: 5000 });
+  if (!response.data.result?.list || response.data.result.list.length === 0) {
     throw new Error('No data returned from Bybit');
   }
   return response.data.result;
 }
 
-async function fetchOkxOI(instId, config) {
-  const params = { instId: instId };
+async function fetchOkxLSR(instId, config) {
+  const params = {
+    instId: instId,
+    period: config.API_INTERVAL,
+    limit: 1
+  };
 
   const response = await axios.get(config.URL, { params, timeout: 5000 });
   if (response.data.code !== "0") {
@@ -190,15 +230,15 @@ async function pollSymbolAndExchange(baseSymbol, exchangeConfig) {
 
     switch (perpspec) {
       case EXCHANGE_CONFIG.BINANCE.PERPSPEC:
-        rawData = await fetchBinanceOI(exchangeSymbol, exchangeConfig);
+        rawData = await fetchBinanceLSR(exchangeSymbol, exchangeConfig);
         processedData = processBinanceData(rawData, baseSymbol, exchangeConfig);
         break;
       case EXCHANGE_CONFIG.BYBIT.PERPSPEC:
-        rawData = await fetchBybitOI(exchangeSymbol, exchangeConfig);
+        rawData = await fetchBybitLSR(exchangeSymbol, exchangeConfig);
         processedData = processBybitData(rawData, baseSymbol, exchangeConfig);
         break;
       case EXCHANGE_CONFIG.OKX.PERPSPEC:
-        rawData = await fetchOkxOI(exchangeSymbol, exchangeConfig);
+        rawData = await fetchOkxLSR(exchangeSymbol, exchangeConfig);
         processedData = processOkxData(rawData, baseSymbol, exchangeConfig);
         break;
     }
@@ -240,9 +280,9 @@ async function pollAllSymbols() {
 
   // Track successful polls per perpspec
   const successCounts = {
-    'bin-oi': 0,
-    'byb-oi': 0,
-    'okx-oi': 0
+    'bin-lsr': 0,
+    'byb-lsr': 0,
+    'okx-lsr': 0
   };
 
   for (const baseSymbol of perpList) {
@@ -272,7 +312,8 @@ async function pollAllSymbols() {
  * ========================================== */
 
 async function execute() {
-  console.log(`⏰ Starting ${SCRIPT_NAME} - Continuous OI polling`);
+  console.log(`🚀 Starting ${SCRIPT_NAME} - Continuous Long/Short Ratio polling`);
+  console.log(`⏰ Poll interval: ${POLL_INTERVAL / 1000} seconds`);
 
   // #1 Log script start ONCE - This makes it appear in "Current Operations"
   // The status 'started' or 'running' keeps it visible in the UI
@@ -292,7 +333,7 @@ async function execute() {
       await pollAllSymbols();
       // #3 Log running status after each poll cycle
       // This keeps the script visible in "Current Operations"
-      await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${SCRIPT_NAME} 1min oi pull`);
+      await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${SCRIPT_NAME} 1min lsr pull`);
     } catch (error) {
       console.error('Error in polling cycle:', error.message);
       await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'SYSTEM', 'POLL_CYCLE_ERROR', error.message);
@@ -319,10 +360,10 @@ async function execute() {
 if (require.main === module) {
   execute()
     .then(() => {
-      console.log('✅ OI continuous polling started');
+      console.log('✅ LSR continuous polling started');
     })
     .catch(err => {
-      console.error('💥 OI continuous polling failed:', err);
+      console.error('💥 LSR continuous polling failed:', err);
       try {
         apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'SYSTEM', 'INITIALIZATION_FAILED', err.message);
       } catch (logError) {

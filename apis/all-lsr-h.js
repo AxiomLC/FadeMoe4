@@ -1,5 +1,5 @@
-// SCRIPT: all-pfr-h.js  5 Oct 2025
-// Unified Premium Funding Rate Backfill Script for Binance, Bybit, and OKX
+// SCRIPT: all-lsr-h.js  6 Oct 2025
+// Unified Long/Short Ratio Backfill Script for Binance, Bybit, and OKX
 // Optimized for maximum speed with improved status logging
 
 const axios = require('axios');
@@ -8,7 +8,7 @@ const apiUtils = require('../api-utils');
 const perpList = require('../perp-list');
 const pLimit = require('p-limit');
 
-const SCRIPT_NAME = 'all-pfr-h.js';
+const SCRIPT_NAME = 'all-lsr-h.js';
 const DAYS = 10;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.now();
@@ -38,47 +38,48 @@ function normalizeNumeric(value) {
 
 const EXCHANGES = {
   BINANCE: {
-    perpspec: 'bin-pfr',
-    source: 'bin-pfr',
-    url: 'https://fapi.binance.com/fapi/v1/premiumIndexKlines',
+    perpspec: 'bin-lsr',
+    source: 'bin-lsr',
+    url: 'https://fapi.binance.com/futures/data/globalLongShortAccountRatio',
     limit: 500,
-    rateDelay: 50,
+    rateDelay: 25,  // 40 req/sec = 25ms delay
     concurrency: 10,
     timeout: 15000,
-    apiInterval: '1m',
+    apiInterval: '5m',
     dbInterval: '1m',
-    apiCandlesTarget: DAYS * 1440,
+    apiCandlesTarget: DAYS * 288,  // 288 x 5min candles per day
     mapSymbol: sym => `${sym}USDT`,
-    fetch: fetchBinancePFR,
-    process: processStandardData
+    fetch: fetchBinanceLSR,
+    process: processBinanceData
   },
   BYBIT: {
-    perpspec: 'byb-pfr',
-    source: 'byb-pfr',
-    url: 'https://api.bybit.com/v5/market/premium-index-price-kline',
-    limit: 200,
-    rateDelay: 50,
+    perpspec: 'byb-lsr',
+    source: 'byb-lsr',
+    url: 'https://api.bybit.com/v5/market/account-ratio',
+    limit: 500,
+    rateDelay: 8,  // 120 req/sec = ~8ms delay
     concurrency: 10,
     timeout: 10000,
-    apiInterval: '1',
+    apiInterval: '5min',
     dbInterval: '1m',
-    apiCandlesTarget: DAYS * 1440,
+    apiCandlesTarget: DAYS * 288,
     mapSymbol: sym => `${sym}USDT`,
-    fetch: fetchBybitPFR,
-    process: processStandardData
+    fetch: fetchBybitLSR,
+    process: processBybitData
   },
   OKX: {
-    perpspec: 'okx-pfr',
-    source: 'okx-pfr',
-    url: 'https://www.okx.com/api/v5/public/premium-history',
+    perpspec: 'okx-lsr',
+    source: 'okx-lsr',
+    url: 'https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract',
     limit: 100,
-    rateDelay: 50,
-    concurrency: 20,
+    rateDelay: 400,  // 2.5 req/sec = 400ms delay
+    concurrency: 5,
     timeout: 8000,
+    apiInterval: '5m',
     dbInterval: '1m',
-    apiCandlesTarget: DAYS * 1440,
+    apiCandlesTarget: 5 * 288,  // OKX only returns 5 days max
     mapSymbol: sym => `${sym}-USDT-SWAP`,
-    fetch: fetchOKXPremium,
+    fetch: fetchOKXLSR,
     process: processOKXData
   }
 };
@@ -86,9 +87,8 @@ const EXCHANGES = {
 // ============================================================================
 // FETCH FUNCTIONS
 // ============================================================================
-
 //=================BINANCE========================================
-async function fetchBinancePFR(symbol, config, startTs, endTs) {
+async function fetchBinanceLSR(symbol, config, startTs, endTs) {
   let allData = [];
   let currentStart = floorToMinute(startTs);
   const flooredEnd = floorToMinute(endTs);
@@ -99,12 +99,15 @@ async function fetchBinancePFR(symbol, config, startTs, endTs) {
   }
 
   while (currentStart < flooredEnd) {
+    // FIX: Add endTime parameter to properly limit the time range
+    const nextEnd = Math.min(currentStart + config.limit * 5 * 60 * 1000, flooredEnd);
+    
     const params = {
       symbol: symbol,
-      interval: config.apiInterval,
+      period: config.apiInterval,
       limit: config.limit,
       startTime: currentStart,
-      endTime: flooredEnd
+      endTime: nextEnd  // ADD THIS LINE
     };
 
     try {
@@ -115,8 +118,8 @@ async function fetchBinancePFR(symbol, config, startTs, endTs) {
 
       allData.push(...data);
 
-      const lastTimestamp = data[data.length - 1][0];
-      currentStart = lastTimestamp + 60 * 1000;
+      const lastTimestamp = data[data.length - 1].timestamp;
+      currentStart = lastTimestamp + 5 * 60 * 1000;
 
       if (data.length < config.limit) break;
 
@@ -127,22 +130,22 @@ async function fetchBinancePFR(symbol, config, startTs, endTs) {
     }
   }
 
-  return allData.filter(d => d[0] >= startTs && d[0] <= endTs);
+  return allData.filter(d => d.timestamp >= startTs && d.timestamp <= endTs);
 }
 
 //=================BYBIT========================================
-async function fetchBybitPFR(symbol, config, startTs, endTs) {
+async function fetchBybitLSR(symbol, config, startTs, endTs) {
   let allData = [];
-  let end = endTs;
+  let currentEnd = endTs;
   const totalRequests = Math.ceil(config.apiCandlesTarget / config.limit);
 
   for (let i = 0; i < totalRequests; i++) {
     const params = {
       category: 'linear',
       symbol: symbol,
-      interval: config.apiInterval,
+      period: config.apiInterval,
       limit: config.limit,
-      end: end
+      endTime: currentEnd
     };
 
     try {
@@ -152,11 +155,11 @@ async function fetchBybitPFR(symbol, config, startTs, endTs) {
 
       if (!list || list.length === 0) break;
 
-      const newData = list.filter(d => parseInt(d[0], 10) < end);
+      const newData = list.filter(d => parseInt(d.timestamp, 10) < currentEnd);
       allData.unshift(...newData);
 
-      const oldestTimestamp = parseInt(list[list.length - 1][0], 10);
-      end = oldestTimestamp - 1;
+      const oldestTimestamp = parseInt(list[list.length - 1].timestamp, 10);
+      currentEnd = oldestTimestamp - 1;
 
       if (allData.length >= config.apiCandlesTarget) break;
 
@@ -168,24 +171,25 @@ async function fetchBybitPFR(symbol, config, startTs, endTs) {
   }
 
   return allData.filter(d => {
-    const ts = parseInt(d[0], 10);
+    const ts = parseInt(d.timestamp, 10);
     return ts >= startTs && ts <= endTs;
   });
 }
 
 //=================OKX========================================
-async function fetchOKXPremium(symbol, config, startTs, endTs) {
+async function fetchOKXLSR(symbol, config, startTs, endTs) {
   const allData = [];
   const seenTimestamps = new Set();
   
-  let currentAfter = endTs;
+  let currentEnd = endTs;  // CHANGE: Use currentEnd instead of currentBefore
   let hasMoreData = true;
   let zeroNewCount = 0;
 
-  while (hasMoreData && currentAfter > startTs) {
+  while (hasMoreData && currentEnd > startTs) {
     const params = {
       instId: symbol,
-      after: currentAfter.toString(),
+      period: config.apiInterval,
+      end: currentEnd.toString(),  // CHANGE: Use 'end' instead of 'before'
       limit: config.limit
     };
 
@@ -202,10 +206,10 @@ async function fetchOKXPremium(symbol, config, startTs, endTs) {
       if (records.length === 0) break;
 
       let newRecordsCount = 0;
-      let oldestTimestamp = currentAfter;
+      let oldestTimestamp = currentEnd;
 
       for (const record of records) {
-        const ts = parseInt(record.ts);
+        const ts = parseInt(record[0]);  // timestamp is first element in array
         if (seenTimestamps.has(ts) || ts < startTs || ts > endTs) continue;
         
         seenTimestamps.add(ts);
@@ -226,7 +230,7 @@ async function fetchOKXPremium(symbol, config, startTs, endTs) {
       if (oldestTimestamp <= startTs) break;
       if (records.length < config.limit) break;
 
-      currentAfter = oldestTimestamp - 1;
+      currentEnd = oldestTimestamp - 1;  // This was correct
       await sleep(config.rateDelay);
 
     } catch (error) {
@@ -245,25 +249,65 @@ async function fetchOKXPremium(symbol, config, startTs, endTs) {
 // DATA PROCESSING FUNCTIONS
 // ============================================================================
 
-//=================STANDARD (BINANCE & BYBIT)========================================
-function processStandardData(rawData, baseSymbol, config) {
+//=================BINANCE========================================
+function processBinanceData(rawData, baseSymbol, config) {
   const perpspec = config.perpspec;
   const result = [];
 
   for (const dataPoint of rawData) {
     try {
-      const timestamp = dataPoint[0];
-      const pfr = parseFloat(dataPoint[4]);
+      const timestamp = dataPoint.timestamp;
+      const lsr = parseFloat(dataPoint.longShortRatio);
 
-      if (!isNaN(pfr)) {
-        result.push({
-          ts: apiUtils.toMillis(BigInt(timestamp)),
-          symbol: baseSymbol,
-          source: perpspec,
-          perpspec,
-          interval: config.dbInterval,
-          pfr
-        });
+      if (!isNaN(lsr)) {
+        // Create 5 x 1m records from each 5m candle
+        for (let i = 0; i < 5; i++) {
+          const minuteTs = timestamp + (i * 60 * 1000);
+          result.push({
+            ts: apiUtils.toMillis(BigInt(minuteTs)),
+            symbol: baseSymbol,
+            source: perpspec,
+            perpspec,
+            interval: config.dbInterval,
+            lsr
+          });
+        }
+      }
+    } catch (e) {
+      // Skip invalid records
+    }
+  }
+
+  return result;
+}
+
+//=================BYBIT========================================
+function processBybitData(rawData, baseSymbol, config) {
+  const perpspec = config.perpspec;
+  const result = [];
+
+  for (const dataPoint of rawData) {
+    try {
+      const timestamp = parseInt(dataPoint.timestamp, 10);
+      const buyRatio = parseFloat(dataPoint.buyRatio);
+      const sellRatio = parseFloat(dataPoint.sellRatio);
+
+      // Calculate LSR: buyRatio / sellRatio
+      if (!isNaN(buyRatio) && !isNaN(sellRatio) && sellRatio !== 0) {
+        const lsr = buyRatio / sellRatio;
+
+        // Create 5 x 1m records from each 5m candle
+        for (let i = 0; i < 5; i++) {
+          const minuteTs = timestamp + (i * 60 * 1000);
+          result.push({
+            ts: apiUtils.toMillis(BigInt(minuteTs)),
+            symbol: baseSymbol,
+            source: perpspec,
+            perpspec,
+            interval: config.dbInterval,
+            lsr
+          });
+        }
       }
     } catch (e) {
       // Skip invalid records
@@ -279,18 +323,22 @@ function processOKXData(rawData, baseSymbol, config) {
   const result = [];
 
   for (const record of rawData) {
-    const timestamp = parseInt(record.ts);
-    const premium = normalizeNumeric(record.premium);
+    const timestamp = parseInt(record[0]);
+    const lsr = normalizeNumeric(record[1]);
 
-    if (premium !== null && !isNaN(timestamp)) {
-      result.push({
-        ts: apiUtils.toMillis(BigInt(timestamp)),
-        symbol: baseSymbol,
-        source: perpspec,
-        perpspec,
-        interval: config.dbInterval,
-        pfr: premium
-      });
+    if (lsr !== null && !isNaN(timestamp)) {
+      // Create 5 x 1m records from each 5m candle
+      for (let i = 0; i < 5; i++) {
+        const minuteTs = timestamp + (i * 60 * 1000);
+        result.push({
+          ts: apiUtils.toMillis(BigInt(minuteTs)),
+          symbol: baseSymbol,
+          source: perpspec,
+          perpspec,
+          interval: config.dbInterval,
+          lsr
+        });
+      }
     }
   }
 
@@ -304,7 +352,7 @@ function processOKXData(rawData, baseSymbol, config) {
 async function backfill() {
   const startTime = Date.now();
   
-  console.log(`\n🚀 Starting ${SCRIPT_NAME} backfill for Premium Funding Rates...`);
+  console.log(`\n🚀 Starting ${SCRIPT_NAME} backfill for Long/Short Ratios...`);
 
   const perpspecs = Object.values(EXCHANGES).map(ex => ex.perpspec).join(', ');
   
@@ -313,9 +361,9 @@ async function backfill() {
     dbManager,
     SCRIPT_NAME,
     'started',
-    `Starting ${SCRIPT_NAME} backfill for Premium Funding Rates for ${perpspecs}.`
+    `Starting ${SCRIPT_NAME} backfill for Long/Short Ratios for ${perpspecs}.`
   );
-// apparantly these are for CURRENT OPERATIONS on UI, but not working
+
   await apiUtils.logScriptStatus(
     dbManager,
     SCRIPT_NAME,
@@ -347,7 +395,7 @@ async function backfill() {
               dbManager,
               SCRIPT_NAME,
               'connected',
-              `${config.perpspec} connected, starting fetch for ${baseSym}`
+              `${config.perpspec} starting fetch`
             );
             connectedLogged[config.perpspec] = true;
           }
@@ -419,7 +467,7 @@ async function backfill() {
   }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-  console.log(`\n🎉 All Premium Funding Rate backfills completed in ${duration}s!`);
+  console.log(`\n🎉 All Long/Short Ratio backfills completed in ${duration}s!`);
 }
 
 // ============================================================================
@@ -429,11 +477,11 @@ async function backfill() {
 if (require.main === module) {
   backfill()
     .then(() => {
-      console.log('✅ PFR backfill script completed successfully');
+      console.log('✅ LSR backfill script completed successfully');
       process.exit(0);
     })
     .catch(err => {
-      console.error('💥 PFR backfill script failed:', err);
+      console.error('💥 LSR backfill script failed:', err);
       process.exit(1);
     });
 }
