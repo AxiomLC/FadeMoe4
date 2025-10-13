@@ -72,7 +72,7 @@ class DatabaseManager {
                     PRIMARY KEY (ts, symbol, source)
                 )`
             );
-            console.log('  - Created/updated perp_data table with OHLCV + OI columns.');
+            console.log('  - Created/updated perp_data tables.');
         } catch (error) {
             console.error(`  - Error creating/updating perp_data table: ${error.message}`);
         }

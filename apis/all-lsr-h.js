@@ -44,7 +44,7 @@ const EXCHANGES = {
     limit: 500,
     rateDelay: 25,  // 40 req/sec = 25ms delay
     concurrency: 10,
-    timeout: 15000,
+    timeout: 8000,
     apiInterval: '5m',
     dbInterval: '1m',
     apiCandlesTarget: DAYS * 288,  // 288 x 5min candles per day
@@ -59,7 +59,7 @@ const EXCHANGES = {
     limit: 500,
     rateDelay: 8,  // 120 req/sec = ~8ms delay
     concurrency: 10,
-    timeout: 10000,
+    timeout: 8000,
     apiInterval: '5min',
     dbInterval: '1m',
     apiCandlesTarget: DAYS * 288,
@@ -72,8 +72,8 @@ const EXCHANGES = {
     source: 'okx-lsr',
     url: 'https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract',
     limit: 100,
-    rateDelay: 400,  // 2.5 req/sec = 400ms delay
-    concurrency: 5,
+    rateDelay: 300,  // 2.5 req/sec = 400ms delay
+    concurrency: 8,
     timeout: 8000,
     apiInterval: '5m',
     dbInterval: '1m',

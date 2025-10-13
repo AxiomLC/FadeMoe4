@@ -13,7 +13,7 @@ require('dotenv').config();
 const apiUtils = require('../api-utils'); // Adjust path; for status/error logging
 const dbManager = require('../db/dbsetup'); // Assume this provides dbManager; fallback to pool if needed
 
-const SCRIPT_NAME = 'rsi9.js';
+const SCRIPT_NAME = 'rsi-h.js';
 const PERIOD = 11; // RSI period - change this to adjust for all calculations
 const INTERVAL = '1m'; // Fixed 1m interval for all insertions (DB is 1m-based)
 const AGGREGATE_MINUTES = 60; // Aggregation interval for RSI60 in minutes (60m = 1 hour) - can be changed for testing

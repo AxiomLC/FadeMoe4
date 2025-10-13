@@ -1,14 +1,17 @@
 /* ==========================================
- * web-tv-c.js   8 Oct 2025
+ * web-tv-c.js   13 Oct 2025
  * Continuous WebSocket Taker Volume Collector
  *
  * Streams trade data from Binance, Bybit, and OKX
  * Aggregates taker buy/sell volume into 5-minute windows
  * Uses OHLCV (exchange-specific: bin-ohlcv/byb-ohlcv/okx-ohlcv) to distribute into biased 1m tbv/tsv
  * Inserts 5 x 1m records per 5m window (even split fallback if OHLCV incomplete/lagging)
+ * 
+ * FIXED: OKX contract normalization - converts sz (contracts) to base tokens via ctVal
  * ========================================== */
 
 const WebSocket = require('ws');
+const axios = require('axios');
 const apiUtils = require('../api-utils');
 const dbManager = require('../db/dbsetup');
 const perpList = require('../perp-list');
@@ -17,6 +20,36 @@ require('dotenv').config();
 const SCRIPT_NAME = 'web-tv-c.js';
 const AGGREGATION_WINDOW = 5 * 60 * 1000; // 5 minutes for tbv/tsv totals
 const FLUSH_INTERVAL = 60000; // Check/flush every 1 minute (for completed 5m windows)
+
+/* ==========================================
+ * OKX CONTRACT VALUE CACHE
+ * Maps instId to ctVal for volume normalization
+ * ========================================== */
+const okxContractMap = {}; // { "BTC-USDT-SWAP": 0.01, "ETH-USDT-SWAP": 0.1, ... }
+
+async function loadOkxContracts() {
+  try {
+    const res = await axios.get("https://www.okx.com/api/v5/public/instruments?instType=SWAP", {
+      timeout: 10000
+    });
+    
+    if (res.data && res.data.data) {
+      for (const inst of res.data.data) {
+        okxContractMap[inst.instId] = parseFloat(inst.ctVal);
+      }
+      console.log(`✅ Loaded ${Object.keys(okxContractMap).length} OKX contract specs`);
+    }
+  } catch (err) {
+    console.error('❌ Failed to load OKX contracts:', err.message);
+    await apiUtils.logScriptError(
+      dbManager,
+      SCRIPT_NAME,
+      'API',
+      'OKX_CONTRACT_LOAD_ERROR',
+      err.message
+    );
+  }
+}
 
 /* ==========================================
  * EXCHANGE CONFIGURATION
@@ -216,10 +249,14 @@ async function flushBucket(perpspec, baseSymbol) {
             prevC = currC;
 
             const vol_weight = currV / total_v;
-            const s = price_delta > 0 ? 1 : (price_delta < 0 ? -1 : 0);
 
-            const tbv_w = vol_weight * (1 + s) / 2;
-            const tsv_w = vol_weight * (1 - s) / 2;
+            //=====================change 13 OCt=======================
+            const s = price_delta > 0 ? 1 : (price_delta < 0 ? -1 : 0);
+            const BIAS_STRENGTH = 0.6;  // 60% bias (adjust 0-1)
+
+            const tbv_w = vol_weight * (0.5 + s * BIAS_STRENGTH * 0.5);  // Range: 20%-80%
+            const tsv_w = vol_weight * (0.5 - s * BIAS_STRENGTH * 0.5);  // Range: 80%-20%
+            //========================================================
 
             tbv_weights.push(tbv_w);
             tsv_weights.push(tsv_w);
@@ -286,11 +323,18 @@ async function flushBucket(perpspec, baseSymbol) {
 async function flushAllBuckets(perpspec) {
   const symbols = Object.keys(volumeBuckets[perpspec]);
   for (const symbol of symbols) {
-    const bucket = volumeBuckets[perpspec][symbol];
-    const now = Date.now();
-    const currentWindow = Math.floor(now / AGGREGATION_WINDOW) * AGGREGATION_WINDOW;
-    if (bucket.windowStart < currentWindow) {  // Only completed 5m
-      await flushBucket(perpspec, symbol);
+    try {
+      const bucket = volumeBuckets[perpspec][symbol];
+      if (!bucket) continue;  // Defensive check
+
+      const now = Date.now();
+      const currentWindow = Math.floor(now / AGGREGATION_WINDOW) * AGGREGATION_WINDOW;
+      if (bucket.windowStart < currentWindow) {  // Only completed 5m
+        await flushBucket(perpspec, symbol);
+      }
+    } catch (err) {
+      console.error(`Error flushing bucket for ${perpspec} ${symbol}:`, err);
+      await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'INTERNAL', 'FLUSH_ALL_BUCKETS_ERROR', err.message, { perpspec, symbol });
     }
   }
 }
@@ -302,6 +346,7 @@ async function flushAllBuckets(perpspec) {
 
 /**
  * Process trade and add to 5min aggregation bucket
+ * FIXED: OKX volume now normalized to base tokens via ctVal
  */
 async function processTrade(exchange, baseSymbol, rawData) {
   const config = EXCHANGE_CONFIG[exchange];
@@ -323,7 +368,11 @@ async function processTrade(exchange, baseSymbol, rawData) {
     } else if (exchange === 'OKX') {
       timestamp = parseInt(rawData.ts);
       isBuy = rawData.side === 'buy';
-      volume = parseFloat(rawData.sz);
+      
+      // FIX: Convert contracts to base tokens
+      const instId = rawData.instId;
+      const ctVal = okxContractMap[instId] || 0.01;  // Fallback to 0.01 if not loaded
+      volume = parseFloat(rawData.sz) * ctVal;  // sz (contracts) × ctVal = base tokens
     }
 
     if (isNaN(timestamp) || isNaN(volume) || volume <= 0) return;
@@ -351,7 +400,7 @@ async function processTrade(exchange, baseSymbol, rawData) {
 }
 
 /* ==========================================
- * WEBSOCKET FUNCTIONS (UNCHANGED STRUCTURE)
+ * WEBSOCKET FUNCTIONS
  * ========================================== */
 
 // Binance: One WS per symbol
@@ -363,10 +412,7 @@ async function binanceWebSocket() {
     const ws = new WebSocket(wsUrl);
 
     ws.on('open', () => {
-        console.log(`✅ Binance WS subscribed to ${perpList.length} symbols`);  // Single line like others
-          
     });
-//console.log(`✅ Binance WS open for ${baseSymbol}`);
 
     ws.on('message', async (data) => {
       try {
@@ -394,7 +440,7 @@ async function binanceWebSocket() {
         error.message,
         { perpspec: config.PERPSPEC, symbol: baseSymbol }
       );
-      setTimeout(() => binanceWebSocket(), 5000);  // Restart per symbol? Or global—adjust if needed
+      setTimeout(() => binanceWebSocket(), 5000);
     });
 
     ws.on('close', () => {
@@ -411,12 +457,11 @@ async function bybitWebSocket() {
 
   ws.on('open', () => {
     const args = perpList.map(sym => `publicTrade.${config.mapSymbol(sym)}`);
-    // Chunk subscriptions (Bybit limit ~200 total)
     for (let i = 0; i < args.length; i += 200) {
       const chunk = args.slice(i, i + 200);
       ws.send(JSON.stringify({ op: 'subscribe', args: chunk }));
     }
-    console.log(`✅ Bybit WS subscribed to ${perpList.length} symbols`);
+    console.log(`✅ Buy/Sell Taker Vol subscribed to ${perpList.length} symbols`);
   });
 
   ws.on('message', async (data) => {
@@ -426,7 +471,7 @@ async function bybitWebSocket() {
       if (!message.data || !Array.isArray(message.data)) return;
 
       const topic = message.topic || '';
-      const symbolFromTopic = topic.split('.')[1];  // e.g., 'BTCUSDT'
+      const symbolFromTopic = topic.split('.')[1];
 
       const baseSymbol = perpList.find(sym => config.mapSymbol(sym) === symbolFromTopic);
       if (!baseSymbol) return;
@@ -475,9 +520,7 @@ async function okxWebSocket() {
       channel: 'trades',
       instId: config.mapSymbol(sym)
     }));
-    // OKX limit ~480 channels; chunk if needed
     ws.send(JSON.stringify({ op: 'subscribe', args }));
-    console.log(`✅ OKX WS subscribed to ${perpList.length} symbols`);
   });
 
   ws.on('message', async (data) => {
@@ -498,7 +541,7 @@ async function okxWebSocket() {
         const baseSymbol = perpList.find(sym => config.mapSymbol(sym) === instId);
         if (!baseSymbol) continue;
 
-        for (const trade of tradeData.data || [tradeData]) {  // Handle array or single
+        for (const trade of tradeData.data || [tradeData]) {
           await processTrade('OKX', baseSymbol, trade);
         }
       }
@@ -550,12 +593,12 @@ async function startPeriodicFlush() {
     // Periodic status: Log session total inserted (cumulative since start)
     const nowLog = Date.now();
     for (const perpspec of Object.keys(EXCHANGE_CONFIG)) {
-      const key = EXCHANGE_CONFIG[perpspec].PERPSPEC;
-      if (!lastStatusLog[key] || nowLog - lastStatusLog[key] >= STATUS_LOG_INTERVAL) {
-        const message = `${key} total inserted ${sessionInsertCounts[key]} 1m records (session)`;
-        await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message);
-        console.log(message);  // Optional console for monitoring
-        lastStatusLog[key] = nowLog;
+        const key = EXCHANGE_CONFIG[perpspec].PERPSPEC;
+        if (!lastStatusLog[key] || nowLog - lastStatusLog[key] >= STATUS_LOG_INTERVAL) {
+    const message = `${key} 1m insert`;
+    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message);
+    console.log(message);
+    lastStatusLog[key] = nowLog;
       }
     }
   }, FLUSH_INTERVAL);
@@ -566,6 +609,9 @@ async function startPeriodicFlush() {
  * ========================================== */
 async function execute() {
   console.log(`🚀 Starting ${SCRIPT_NAME} - WebSocket taker volume streaming (5m biased to 1m)`);
+
+  // Load OKX contract values for normalization
+  await loadOkxContracts();
 
   // Status: Started
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);

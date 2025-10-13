@@ -9,7 +9,7 @@ const axios = require('axios');
 const apiUtils = require('../api-utils');
 const dbManager = require('../db/dbsetup');
 
-const SCRIPT_NAME = 'all-pfr-c2.js';
+const SCRIPT_NAME = 'all-pfr-c.js';
 const POLL_INTERVAL = 60 * 1000; // 1 minute
 
 /* ==========================================

@@ -227,10 +227,13 @@ async function processBinanceData(rawData, baseSymbol) {
         prevC = currC;
 
         const vol_weight = currV / total_v;
+        //==========================changed below 13 Oct ================================
         const s = price_delta > 0 ? 1 : (price_delta < 0 ? -1 : 0);
+        const BIAS_STRENGTH = 0.6;  // 60% bias (adjust 0-1)
 
-        const tbv_w = vol_weight * (1 + s) / 2;  // 1 (up), 0.5 (flat), 0 (down)
-        const tsv_w = vol_weight * (1 - s) / 2;  // 0 (up), 0.5 (flat), 1 (down)
+        const tbv_w = vol_weight * (0.5 + s * BIAS_STRENGTH * 0.5);  // Range: 20%-80%
+        const tsv_w = vol_weight * (0.5 - s * BIAS_STRENGTH * 0.5);  // Range: 80%-20%
+        //================================================================================
 
         tbv_weights.push(tbv_w);
         tsv_weights.push(tsv_w);

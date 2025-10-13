@@ -8,7 +8,6 @@ module.exports = [
     'DOGE',
     'BTC',
     'XPL',
-    'PUMP',
     'SPX',
     'IP',
     'ASTER',

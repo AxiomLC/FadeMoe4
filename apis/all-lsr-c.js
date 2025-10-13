@@ -1,10 +1,9 @@
 /* ==========================================
- * all-lsr-c.js   6 Oct 2025
+ * all-lsr-c.js   11 Oct 2025
  * Continuous Long/Short Ratio Polling Script
  *
  * Fetches LSR data from Binance, Bybit, and OKX
- * Expands 5m candles to 5 x 1m records
- * Inserts data into the database
+ * Inserts 1m record immediately at current 1m boundary, caches 4 for 1m upserts
  * Logs high-level status messages for UI and monitoring
  * ========================================== */
 
@@ -15,11 +14,16 @@ const perpList = require('../perp-list');
 require('dotenv').config();
 
 const SCRIPT_NAME = 'all-lsr-c.js';
-const POLL_INTERVAL = 60 * 1000; // 1 minute
+const POLL_INTERVAL = 60 * 1000; // 1 minute heartbeat
+const RETRY_INTERVAL = 10 * 1000; // 10s retry if no new
+const WAIT_BUFFER = 5 * 1000; // +5s after 5m
+const DEFAULT_5M_TIME = 300 * 1000; // 5min default
+const ERROR_THRESHOLD = 50; // Max errors/min
+const PERPSPECS = ['bin-lsr', 'byb-lsr', 'okx-lsr'];
+let errorCount = 0; // Reset per heartbeat
 
 /* ==========================================
  * EXCHANGE CONFIGURATION
- * Defines API URLs and perpspec names for each exchange
  * ========================================== */
 const EXCHANGE_CONFIG = {
   BINANCE: {
@@ -45,265 +49,179 @@ const EXCHANGE_CONFIG = {
   }
 };
 
-/* ==========================================
- * DATA PROCESSING FUNCTIONS
- * Parse raw API data into normalized records
- * Expand 5m candles to 5 x 1m records
- * ========================================== */
-
-/**
- * Process Binance LSR snapshot
- * Returns array of 5 x 1m records expanded from 5m candle
- */
-function processBinanceData(rawData, baseSymbol, config) {
-  const perpspec = config.PERPSPEC;
-  const expandedRecords = [];
-
-  try {
-    // Binance returns array, take the latest (most recent) record
-    const dataPoint = rawData[rawData.length - 1];
-    if (!dataPoint) return null;
-
-    const timestamp = dataPoint.timestamp;
-    const lsr = parseFloat(dataPoint.longShortRatio);
-
-    if (isNaN(lsr)) {
-      return null;
-    }
-
-    // Expand 5m candle to 5 x 1m records
-    for (let i = 0; i < 5; i++) {
-      expandedRecords.push({
-        ts: apiUtils.toMillis(BigInt(timestamp + i * 60 * 1000)),
-        symbol: baseSymbol,
-        source: perpspec,
-        perpspec: perpspec,
-        interval: config.DB_INTERVAL,
-        lsr
-      });
-    }
-
-    return expandedRecords;
-  } catch (e) {
-    return null;
-  }
-}
-
-/**
- * Process Bybit LSR snapshot
- * Returns array of 5 x 1m records expanded from 5m candle
- */
-function processBybitData(rawData, baseSymbol, config) {
-  const perpspec = config.PERPSPEC;
-  const expandedRecords = [];
-
-  try {
-    // Bybit returns nested structure
-    const dataPoint = rawData.list[0];
-    if (!dataPoint) return null;
-
-    const timestamp = parseInt(dataPoint.timestamp, 10);
-    const buyRatio = parseFloat(dataPoint.buyRatio);
-    const sellRatio = parseFloat(dataPoint.sellRatio);
-
-    // Calculate LSR: buyRatio / sellRatio
-    if (isNaN(buyRatio) || isNaN(sellRatio) || sellRatio === 0) {
-      return null;
-    }
-
-    const lsr = buyRatio / sellRatio;
-
-    // Expand 5m candle to 5 x 1m records
-    for (let i = 0; i < 5; i++) {
-      expandedRecords.push({
-        ts: apiUtils.toMillis(BigInt(timestamp + i * 60 * 1000)),
-        symbol: baseSymbol,
-        source: perpspec,
-        perpspec: perpspec,
-        interval: config.DB_INTERVAL,
-        lsr
-      });
-    }
-
-    return expandedRecords;
-  } catch (e) {
-    return null;
-  }
-}
-
-/**
- * Process OKX LSR snapshot
- * Returns array of 5 x 1m records expanded from 5m candle
- */
-function processOkxData(rawData, baseSymbol, config) {
-  const perpspec = config.PERPSPEC;
-  const expandedRecords = [];
-
-  try {
-    // OKX returns array of arrays, take first (most recent) record
-    const dataPoint = rawData[0];
-    if (!dataPoint) return null;
-
-    const timestamp = parseInt(dataPoint[0]);
-    const lsr = parseFloat(dataPoint[1]);
-
-    if (isNaN(lsr)) {
-      return null;
-    }
-
-    // Expand 5m candle to 5 x 1m records
-    for (let i = 0; i < 5; i++) {
-      expandedRecords.push({
-        ts: apiUtils.toMillis(BigInt(timestamp + i * 60 * 1000)),
-        symbol: baseSymbol,
-        source: perpspec,
-        perpspec: perpspec,
-        interval: config.DB_INTERVAL,
-        lsr
-      });
-    }
-
-    return expandedRecords;
-  } catch (e) {
-    return null;
-  }
-}
+// Track per symbol: lastTs (ms), cache {lsr, offsets: [60k,120k,180k,240k]}, fiveMTime (ms delay)
+const symbolData = new Map(); // key: perpspec:symbol, value: {lastTs, cache, fiveMTime}
 
 /* ==========================================
- * EXCHANGE-SPECIFIC FETCH FUNCTIONS
- * Fetch current LSR data from each exchange API
+ * SHARED POLLING FUNCTION
+ * Handles A-D logic for all exchanges
  * ========================================== */
-
-async function fetchBinanceLSR(symbol, config) {
-  const params = {
-    symbol: symbol,
-    period: config.API_INTERVAL,
-    limit: 1
-  };
-
-  const response = await axios.get(config.URL, { params, timeout: 5000 });
-  return response.data;
-}
-
-async function fetchBybitLSR(symbol, config) {
-  const params = {
-    category: 'linear',
-    symbol: symbol,
-    period: config.API_INTERVAL,
-    limit: 1
-  };
-
-  const response = await axios.get(config.URL, { params, timeout: 5000 });
-  if (!response.data.result?.list || response.data.result.list.length === 0) {
-    throw new Error('No data returned from Bybit');
-  }
-  return response.data.result;
-}
-
-async function fetchOkxLSR(instId, config) {
-  const params = {
-    instId: instId,
-    period: config.API_INTERVAL,
-    limit: 1
-  };
-
-  const response = await axios.get(config.URL, { params, timeout: 5000 });
-  if (response.data.code !== "0") {
-    throw new Error(`OKX API error: ${response.data.msg}`);
-  }
-  return response.data.data || [];
-}
-
-/* ==========================================
- * POLLING ORCHESTRATION
- * Poll all symbols for all exchanges concurrently
- * ========================================== */
-
-async function pollSymbolAndExchange(baseSymbol, exchangeConfig) {
-  const perpspec = exchangeConfig.PERPSPEC;
+async function pollLSR(baseSymbol, config) {
+  const perpspec = config.PERPSPEC;
+  const key = `${perpspec}:${baseSymbol}`;
+  const exchangeSymbol = config.mapSymbol(baseSymbol);
   const exchangeName = perpspec.split('-')[0];
-  const exchangeSymbol = exchangeConfig.mapSymbol(baseSymbol);
+  const now = Date.now();
 
   try {
+    // Fetch latest
     let rawData = null;
-    let processedData = null;
-
     switch (perpspec) {
-      case EXCHANGE_CONFIG.BINANCE.PERPSPEC:
-        rawData = await fetchBinanceLSR(exchangeSymbol, exchangeConfig);
-        processedData = processBinanceData(rawData, baseSymbol, exchangeConfig);
+      case 'bin-lsr':
+        rawData = await fetchBinanceLSR(exchangeSymbol, config);
         break;
-      case EXCHANGE_CONFIG.BYBIT.PERPSPEC:
-        rawData = await fetchBybitLSR(exchangeSymbol, exchangeConfig);
-        processedData = processBybitData(rawData, baseSymbol, exchangeConfig);
+      case 'byb-lsr':
+        rawData = await fetchBybitLSR(exchangeSymbol, config);
         break;
-      case EXCHANGE_CONFIG.OKX.PERPSPEC:
-        rawData = await fetchOkxLSR(exchangeSymbol, exchangeConfig);
-        processedData = processOkxData(rawData, baseSymbol, exchangeConfig);
+      case 'okx-lsr':
+        rawData = await fetchOkxLSR(exchangeSymbol, config);
         break;
     }
 
-    if (!processedData) {
+    // Process
+    let lsr = null;
+    switch (perpspec) {
+      case 'bin-lsr':
+        const binPoint = rawData[rawData.length - 1];
+        if (!binPoint) throw new Error(`No data for ${baseSymbol}`);
+        lsr = parseFloat(binPoint.longShortRatio);
+        break;
+      case 'byb-lsr':
+        const bybPoint = rawData.list[0];
+        if (!bybPoint) throw new Error(`No data for ${baseSymbol}`);
+        const buyRatio = parseFloat(bybPoint.buyRatio);
+        const sellRatio = parseFloat(bybPoint.sellRatio);
+        if (isNaN(buyRatio) || sellRatio === 0) throw new Error(`Invalid ratio for ${baseSymbol}`);
+        lsr = buyRatio / sellRatio;
+        break;
+      case 'okx-lsr':
+        const okxPoint = rawData[0];
+        if (!okxPoint) throw new Error(`No data for ${baseSymbol}`);
+        lsr = parseFloat(okxPoint[1]);
+        break;
+    }
+    if (isNaN(lsr)) throw new Error(`Invalid LSR for ${baseSymbol}`);
+
+    // Use current 1min boundary for first record
+    const timestamp = Math.floor(now / (60*1000)) * (60*1000);
+
+    const data = symbolData.get(key) || {lastTs: 0, cache: null, fiveMTime: DEFAULT_5M_TIME};
+    if (timestamp <= data.lastTs) {
+      // No new; retry
+      setTimeout(() => pollLSR(baseSymbol, config), RETRY_INTERVAL);
       return;
     }
 
-    const recordsToInsert = Array.isArray(processedData) ? processedData : [processedData];
-    await dbManager.insertData(perpspec, recordsToInsert);
+    // New record: Calc fiveMTime
+    data.fiveMTime = data.lastTs ? timestamp - data.lastTs : DEFAULT_5M_TIME;
+    data.lastTs = timestamp;
+    data.cache = {lsr, offsets: [60*1000, 120*1000, 180*1000, 240*1000]}; // Cache at +1min to +4min
+    symbolData.set(key, data);
+
+    // Upsert first 1m
+    await dbManager.insertData(perpspec, [{
+      ts: apiUtils.toMillis(BigInt(timestamp)),
+      symbol: baseSymbol,
+      source: perpspec,
+      perpspec,
+      interval: config.DB_INTERVAL,
+      lsr
+    }]);
+
+    // Schedule next poll
+    setTimeout(() => pollLSR(baseSymbol, config), data.fiveMTime + WAIT_BUFFER);
 
   } catch (error) {
+    errorCount++;
     console.error(`[${perpspec}] Error polling ${baseSymbol}:`, error.message);
     await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'API', 'POLL_ERROR', error.message, {
       exchange: exchangeName,
       symbol: baseSymbol,
       perpspec
     });
+    setTimeout(() => pollLSR(baseSymbol, config), RETRY_INTERVAL);
   }
 }
 
 /* ==========================================
+ * EXCHANGE-SPECIFIC FETCH FUNCTIONS
+ * ========================================== */
+
+async function fetchBinanceLSR(symbol, config) {
+  const params = { symbol, period: config.API_INTERVAL, limit: 1 };
+  const response = await axios.get(config.URL, { params, timeout: 5000 });
+  if (response.data.length === 0) throw new Error(`No data for ${symbol}`);
+  return response.data;
+}
+
+async function fetchBybitLSR(symbol, config) {
+  const params = { category: 'linear', symbol, period: config.API_INTERVAL, limit: 1 };
+  const response = await axios.get(config.URL, { params, timeout: 5000 });
+  if (!response.data.result?.list.length) throw new Error(`No data for ${symbol}`);
+  return response.data.result;
+}
+
+async function fetchOkxLSR(instId, config) {
+  const params = { instId, period: config.API_INTERVAL, limit: 1 };
+  const response = await axios.get(config.URL, { params, timeout: 5000 });
+  if (response.data.code !== '0' || !response.data.data.length) throw new Error(`No data for ${instId}`);
+  return response.data.data;
+}
+
+/* ==========================================
  * POLL ALL SYMBOLS
- * Poll all exchanges concurrently for all symbols
+ * Heartbeat for running log and cache release
  * ========================================== */
 
 async function pollAllSymbols() {
-  console.log(`\n[${new Date().toISOString().slice(11, 19)}] Polling ${perpList.length} symbols...`);
+  errorCount = 0; // Reset counter
+  const successCounts = PERPSPECS.reduce((acc, p) => ({...acc, [p]: 0}), {});
 
-  const exchangesToFetch = [
-    EXCHANGE_CONFIG.BINANCE,
-    EXCHANGE_CONFIG.BYBIT,
-    EXCHANGE_CONFIG.OKX
-  ];
-
-  const pLimit = (await import('p-limit')).default;
-  const limit = pLimit(10); // Higher concurrency for real-time snapshots
-  const promises = [];
-
-  // Track successful polls per perpspec
-  const successCounts = {
-    'bin-lsr': 0,
-    'byb-lsr': 0,
-    'okx-lsr': 0
-  };
-
-  for (const baseSymbol of perpList) {
-    for (const config of exchangesToFetch) {
-      promises.push(limit(async () => {
-        try {
-          await pollSymbolAndExchange(baseSymbol, config);
-          successCounts[config.PERPSPEC]++;
-        } catch (error) {
-          // Error already logged in pollSymbolAndExchange
-        }
-      }));
+  // Release cached 1m records
+  for (const [key, data] of symbolData) {
+    const {cache: c, lastTs} = data;
+    if (!c || !c.offsets.length) continue;
+    const [perpspec, baseSymbol] = key.split(':');
+    const nextTs = lastTs + c.offsets[0];
+    if (Date.now() >= nextTs) {
+      try {
+        const exchange = Object.values(EXCHANGE_CONFIG).find(config => config.PERPSPEC === perpspec);
+        if (!exchange) throw new Error(`No config for ${perpspec}`);
+        await dbManager.insertData(perpspec, [{
+          ts: apiUtils.toMillis(BigInt(nextTs)),
+          symbol: baseSymbol,
+          source: perpspec,
+          perpspec,
+          interval: exchange.DB_INTERVAL,
+          lsr: c.lsr
+        }]);
+        c.offsets.shift();
+        if (!c.offsets.length) delete data.cache;
+        successCounts[perpspec]++;
+      } catch (error) {
+        errorCount++;
+        console.error(`[${perpspec}] Error polling ${baseSymbol}:`, error.message);
+        await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'API', 'POLL_ERROR', error.message, {
+          exchange: perpspec.split('-')[0],
+          symbol: baseSymbol,
+          perpspec
+        });
+      }
     }
   }
 
-  await Promise.all(promises);
-
-  // Log summary per perpspec
-  for (const config of exchangesToFetch) {
-    console.log(`[${config.PERPSPEC}] Polling ${successCounts[config.PERPSPEC]} symbols.`);
+  if (errorCount > ERROR_THRESHOLD) {
+    console.error('Script halted: Error threshold exceeded');
+    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', 'Script halted: Error threshold exceeded');
+    process.exit(1);
   }
+
+  // Log running heartbeat
+  console.log(`\n[${new Date().toISOString().slice(11, 19)}] Polling ${perpList.length} symbols...`);
+  for (const perpspec of PERPSPECS) {
+    console.log(`[${perpspec}] Polling ${successCounts[perpspec]} symbols.`);
+  }
+  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${PERPSPECS.join(', ')} polling LSR ${perpList.length} symbols, 5x1min`);
 }
 
 /* ==========================================
@@ -312,27 +230,22 @@ async function pollAllSymbols() {
  * ========================================== */
 
 async function execute() {
-  console.log(`🚀 Starting ${SCRIPT_NAME} - Continuous Long/Short Ratio polling`);
-  console.log(`⏰ Poll interval: ${POLL_INTERVAL / 1000} seconds`);
-
-  // #1 Log script start ONCE - This makes it appear in "Current Operations"
-  // The status 'started' or 'running' keeps it visible in the UI
+  console.log(`⏰ Starting ${SCRIPT_NAME} - Continuous Long/Short Ratio polling`);
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);
 
-  // Initial poll
-  await pollAllSymbols();
+  // Initial poll all symbols
+  const pLimit = (await import('p-limit')).default;
+  const limit = pLimit(10);
+  await Promise.all(perpList.flatMap(symbol => Object.values(EXCHANGE_CONFIG).map(config => limit(() => pollLSR(symbol, config)))));
 
-  // #2 Log running status after initial poll
-  // CRITICAL: Status must be 'running' to appear in "Current Operations"
-  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${SCRIPT_NAME} initial poll complete`);
+  // Log running status immediately
   console.log(`${SCRIPT_NAME} initial poll complete`);
+  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${SCRIPT_NAME} initial poll complete`);
 
-  // Set up recurring polling
-  const pollIntervalId = setInterval(async () => {
+  // Heartbeat interval
+  const heartbeatId = setInterval(async () => {
     try {
       await pollAllSymbols();
-      // #3 Log running status after each poll cycle
-      // This keeps the script visible in "Current Operations"
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${SCRIPT_NAME} 1min lsr pull`);
     } catch (error) {
       console.error('Error in polling cycle:', error.message);
@@ -340,35 +253,24 @@ async function execute() {
     }
   }, POLL_INTERVAL);
 
-  // Graceful shutdown handler
+  // Graceful shutdown
   process.on('SIGINT', async () => {
-    clearInterval(pollIntervalId);
+    clearInterval(heartbeatId);
     console.log(`\n${SCRIPT_NAME} received SIGINT, stopping...`);
-
-    // #4 Log script stop ONCE - Removes from "Current Operations"
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', `${SCRIPT_NAME} stopped smoothly`);
-
     process.exit(0);
   });
 }
 
 /* ==========================================
  * MODULE ENTRY POINT
- * Execute script if run directly
  * ========================================== */
 
 if (require.main === module) {
   execute()
-    .then(() => {
-      console.log('✅ LSR continuous polling started');
-    })
     .catch(err => {
-      console.error('💥 LSR continuous polling failed:', err);
-      try {
-        apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'SYSTEM', 'INITIALIZATION_FAILED', err.message);
-      } catch (logError) {
-        console.error('Failed to log initial execution error:', logError.message);
-      }
+      console.error(`💥 ${SCRIPT_NAME} failed:`, err.message);
+      apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'SYSTEM', 'INITIALIZATION_FAILED', err.message);
       process.exit(1);
     });
 }

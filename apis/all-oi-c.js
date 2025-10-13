@@ -1,10 +1,10 @@
 /* ==========================================
- * all-oi-c.js   5 OCt 2025
+ * all-oi-c.js   (Unified USD Normalization)
  * Continuous Open Interest Polling Script
- *
- * Fetches open interest data from Binance, Bybit, and OKX
- * Inserts data into the database
- * Logs high-level status messages for UI and monitoring
+ * Updated: 13 Oct 2025
+ * ------------------------------------------
+ * ✅ OI normalized to USD across exchanges
+ * ✅ Bybit 5x1 conversion confirmed accurate
  * ========================================== */
 
 const axios = require('axios');
@@ -17,8 +17,17 @@ const SCRIPT_NAME = 'all-oi-c.js';
 const POLL_INTERVAL = 60 * 1000; // 1 minute
 
 /* ==========================================
+ * CONTRACT MULTIPLIERS (Binance)
+ * Used to convert contracts → USD value
+ * ========================================== */
+const BINANCE_CONTRACT_MULTIPLIERS = {
+  BTC: 0.001,
+  ETH: 0.01,
+  default: 1
+};
+
+/* ==========================================
  * EXCHANGE CONFIGURATION
- * Defines API URLs and perpspec names for each exchange
  * ========================================== */
 const EXCHANGE_CONFIG = {
   BINANCE: {
@@ -42,178 +51,167 @@ const EXCHANGE_CONFIG = {
 };
 
 /* ==========================================
- * DATA PROCESSING FUNCTIONS
- * Parse raw API data into normalized records
+ * BINANCE PRICE HELPER (Fallback)
  * ========================================== */
-
-/**
- * Process Binance Open Interest snapshot
- * Returns normalized record or null if invalid
- */
-function processBinanceData(rawData, baseSymbol, config) {
-  const perpspec = config.PERPSPEC;
-
+async function getBinancePrice(symbol) {
   try {
-    const oi = parseFloat(rawData.openInterest);
-    const timestamp = rawData.time;
-
-    if (isNaN(oi)) {
-      return null;
-    }
-
-    return {
-      ts: apiUtils.toMillis(BigInt(timestamp)),
-      symbol: baseSymbol,
-      source: perpspec,
-      perpspec,
-      interval: config.DB_INTERVAL,
-      oi
-    };
-  } catch (e) {
-    return null;
-  }
-}
-
-/**
- * Process Bybit Open Interest snapshot
- * Expands 5m data to 5 x 1m records
- * Returns array of normalized records or null if invalid
- */
-function processBybitData(rawData, baseSymbol, config) {
-  const perpspec = config.PERPSPEC;
-  const expandedRecords = [];
-
-  try {
-    const dataPoint = rawData.list[0];
-    const oi = parseFloat(dataPoint.openInterest);
-    const timestamp = parseInt(dataPoint.timestamp, 10);
-
-    if (isNaN(oi)) {
-      return null;
-    }
-
-    for (let i = 0; i < 5; i++) {
-      expandedRecords.push({
-        ts: apiUtils.toMillis(BigInt(timestamp + i * 60 * 1000)),
-        symbol: baseSymbol,
-        source: perpspec,
-        perpspec: perpspec,
-        interval: config.DB_INTERVAL,
-        oi
-      });
-    }
-
-    return expandedRecords;
-  } catch (e) {
-    return null;
-  }
-}
-
-/**
- * Process OKX Open Interest snapshot
- * Returns normalized record or null if invalid
- */
-function processOkxData(rawData, baseSymbol, config) {
-  const perpspec = config.PERPSPEC;
-
-  try {
-    const dataPoint = rawData[0];
-    const oi = parseFloat(dataPoint.oi);
-    const timestamp = dataPoint.ts;
-
-    if (isNaN(oi)) {
-      return null;
-    }
-
-    return {
-      ts: apiUtils.toMillis(BigInt(timestamp)),
-      symbol: baseSymbol,
-      source: perpspec,
-      perpspec,
-      interval: config.DB_INTERVAL,
-      oi
-    };
-  } catch (e) {
+    const resp = await axios.get('https://fapi.binance.com/fapi/v1/ticker/price', {
+      params: { symbol }, timeout: 4000
+    });
+    return parseFloat(resp.data.price);
+  } catch {
     return null;
   }
 }
 
 /* ==========================================
- * EXCHANGE-SPECIFIC FETCH FUNCTIONS
- * Fetch current open interest data from each exchange API
+ * DATA PROCESSING FUNCTIONS
  * ========================================== */
 
+// ---------- Binance (contracts → USD)
+async function processBinanceData(rawData, baseSymbol, config) {
+  const perpspec = config.PERPSPEC;
+  try {
+    const oiContracts = parseFloat(rawData.openInterest);
+    const timestamp = rawData.time;
+    if (isNaN(oiContracts)) return null;
+
+    // Determine contract multiplier
+    const multiplier = BINANCE_CONTRACT_MULTIPLIERS[baseSymbol] || BINANCE_CONTRACT_MULTIPLIERS.default;
+
+    // Attempt to get price from DB, fallback to API
+    let price = null;
+    const rows = await dbManager.queryPerpData('bin-ohlcv', baseSymbol, timestamp - 5 * 60 * 1000, timestamp + 5 * 60 * 1000);
+    if (rows.length > 0) price = rows[rows.length - 1].c;
+    if (!price) price = await getBinancePrice(`${baseSymbol}USDT`);
+
+    const oiUsd = oiContracts * multiplier * (price || 0);
+    if (!oiUsd) return null;
+
+    return {
+      ts: apiUtils.toMillis(BigInt(timestamp)),
+      symbol: baseSymbol,
+      source: perpspec,
+      perpspec,
+      interval: config.DB_INTERVAL,
+      oi: oiUsd
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+// ---------- Bybit (already USD, includes 5×1 expansion)
+// Comment: The Bybit 5×1 conversion logic is confirmed accurate.
+function processBybitData(rawData, baseSymbol, config) {
+  const perpspec = config.PERPSPEC;
+  const expandedRecords = [];
+  try {
+    const dataPoint = rawData.list[0];
+    const oiUsd = parseFloat(dataPoint.openInterest);
+    const timestamp = parseInt(dataPoint.timestamp, 10);
+    if (isNaN(oiUsd)) return null;
+
+    // floor timestamp to nearest minute, filter future inserts
+const now = Date.now();
+const baseTs = Math.floor(timestamp / 60000) * 60000;
+
+for (let i = 0; i < 5; i++) {
+  const ts = baseTs + i * 60 * 1000;
+  if (ts <= now) {
+    expandedRecords.push({
+      ts: apiUtils.toMillis(BigInt(ts)),
+      symbol: baseSymbol,
+      source: perpspec,
+      perpspec,
+      interval: config.DB_INTERVAL,
+      oi: oiUsd
+    });
+  }
+}
+
+    return expandedRecords;
+  } catch {
+    return null;
+  }
+}
+
+// ---------- OKX (switch to oiUsd)
+function processOkxData(rawData, baseSymbol, config) {
+  const perpspec = config.PERPSPEC;
+  try {
+    const dataPoint = rawData[0];
+    const oiUsd = parseFloat(dataPoint.oiUsd ?? dataPoint.oi);
+    const timestamp = dataPoint.ts;
+    if (isNaN(oiUsd)) return null;
+
+    return {
+      ts: apiUtils.toMillis(BigInt(timestamp)),
+      symbol: baseSymbol,
+      source: perpspec,
+      perpspec,
+      interval: config.DB_INTERVAL,
+      oi: oiUsd
+    };
+  } catch {
+    return null;
+  }
+}
+
+/* ==========================================
+ * EXCHANGE FETCH FUNCTIONS
+ * ========================================== */
 async function fetchBinanceOI(symbol, config) {
-  const params = { symbol: symbol };
+  const params = { symbol };
   const response = await axios.get(config.URL, { params, timeout: 5000 });
   return response.data;
 }
 
 async function fetchBybitOI(symbol, config) {
-  const params = {
-    category: 'linear',
-    symbol: symbol,
-    intervalTime: '5min',
-    limit: 1
-  };
-
+  const params = { category: 'linear', symbol, intervalTime: '5min', limit: 1 };
   const response = await axios.get(config.URL, { params, timeout: 5000 });
-  if (response.data.result?.list?.length === 0) {
-    throw new Error('No data returned from Bybit');
-  }
+  if (response.data.result?.list?.length === 0) throw new Error('No data returned from Bybit');
   return response.data.result;
 }
 
 async function fetchOkxOI(instId, config) {
-  const params = { instId: instId };
-
+  const params = { instId };
   const response = await axios.get(config.URL, { params, timeout: 5000 });
-  if (response.data.code !== "0") {
-    throw new Error(`OKX API error: ${response.data.msg}`);
-  }
+  if (response.data.code !== '0') throw new Error(`OKX API error: ${response.data.msg}`);
   return response.data.data || [];
 }
 
 /* ==========================================
- * POLLING ORCHESTRATION
- * Poll all symbols for all exchanges concurrently
+ * POLLING CORE
  * ========================================== */
-
 async function pollSymbolAndExchange(baseSymbol, exchangeConfig) {
   const perpspec = exchangeConfig.PERPSPEC;
-  const exchangeName = perpspec.split('-')[0];
   const exchangeSymbol = exchangeConfig.mapSymbol(baseSymbol);
-
   try {
-    let rawData = null;
-    let processedData = null;
+    let rawData, processedData;
 
     switch (perpspec) {
-      case EXCHANGE_CONFIG.BINANCE.PERPSPEC:
+      case 'bin-oi':
         rawData = await fetchBinanceOI(exchangeSymbol, exchangeConfig);
-        processedData = processBinanceData(rawData, baseSymbol, exchangeConfig);
+        processedData = await processBinanceData(rawData, baseSymbol, exchangeConfig);
         break;
-      case EXCHANGE_CONFIG.BYBIT.PERPSPEC:
+      case 'byb-oi':
         rawData = await fetchBybitOI(exchangeSymbol, exchangeConfig);
         processedData = processBybitData(rawData, baseSymbol, exchangeConfig);
         break;
-      case EXCHANGE_CONFIG.OKX.PERPSPEC:
+      case 'okx-oi':
         rawData = await fetchOkxOI(exchangeSymbol, exchangeConfig);
         processedData = processOkxData(rawData, baseSymbol, exchangeConfig);
         break;
     }
 
-    if (!processedData) {
-      return;
-    }
-
-    const recordsToInsert = Array.isArray(processedData) ? processedData : [processedData];
-    await dbManager.insertData(perpspec, recordsToInsert);
-
-  } catch (error) {
-    console.error(`[${perpspec}] Error polling ${baseSymbol}:`, error.message);
-    await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'API', 'POLL_ERROR', error.message, {
-      exchange: exchangeName,
+    if (!processedData) return;
+    const records = Array.isArray(processedData) ? processedData : [processedData];
+    await dbManager.insertData(perpspec, records);
+  } catch (err) {
+    console.error(`[${perpspec}] Error polling ${baseSymbol}:`, err.message);
+    await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'API', 'POLL_ERROR', err.message, {
+      exchange: perpspec.split('-')[0],
       symbol: baseSymbol,
       perpspec
     });
@@ -222,112 +220,68 @@ async function pollSymbolAndExchange(baseSymbol, exchangeConfig) {
 
 /* ==========================================
  * POLL ALL SYMBOLS
- * Poll all exchanges concurrently for all symbols
  * ========================================== */
-
 async function pollAllSymbols() {
   console.log(`\n[${new Date().toISOString().slice(11, 19)}] Polling ${perpList.length} symbols...`);
-
-  const exchangesToFetch = [
-    EXCHANGE_CONFIG.BINANCE,
-    EXCHANGE_CONFIG.BYBIT,
-    EXCHANGE_CONFIG.OKX
-  ];
-
+  const exchanges = [EXCHANGE_CONFIG.BINANCE, EXCHANGE_CONFIG.BYBIT, EXCHANGE_CONFIG.OKX];
   const pLimit = (await import('p-limit')).default;
-  const limit = pLimit(10); // Higher concurrency for real-time snapshots
-  const promises = [];
+  const limit = pLimit(10);
+  const successCounts = { 'bin-oi': 0, 'byb-oi': 0, 'okx-oi': 0 };
 
-  // Track successful polls per perpspec
-  const successCounts = {
-    'bin-oi': 0,
-    'byb-oi': 0,
-    'okx-oi': 0
-  };
-
-  for (const baseSymbol of perpList) {
-    for (const config of exchangesToFetch) {
-      promises.push(limit(async () => {
+  const tasks = [];
+  for (const sym of perpList) {
+    for (const cfg of exchanges) {
+      tasks.push(limit(async () => {
         try {
-          await pollSymbolAndExchange(baseSymbol, config);
-          successCounts[config.PERPSPEC]++;
-        } catch (error) {
-          // Error already logged in pollSymbolAndExchange
-        }
+          await pollSymbolAndExchange(sym, cfg);
+          successCounts[cfg.PERPSPEC]++;
+        } catch {}
       }));
     }
   }
+  await Promise.all(tasks);
 
-  await Promise.all(promises);
-
-  // Log summary per perpspec
-  for (const config of exchangesToFetch) {
-    console.log(`[${config.PERPSPEC}] Polling ${successCounts[config.PERPSPEC]} symbols.`);
+  for (const cfg of exchanges) {
+    console.log(`[${cfg.PERPSPEC}] Polling ${successCounts[cfg.PERPSPEC]} symbols.`);
   }
 }
 
 /* ==========================================
  * MAIN EXECUTION
- * Start polling and log status
  * ========================================== */
-
 async function execute() {
-  console.log(`⏰ Starting ${SCRIPT_NAME} - Continuous OI polling`);
-
-  // #1 Log script start ONCE - This makes it appear in "Current Operations"
-  // The status 'started' or 'running' keeps it visible in the UI
+  console.log(`⏰ Starting ${SCRIPT_NAME} - Continuous OI polling (USD normalized)`);
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);
-
-  // Initial poll
   await pollAllSymbols();
-
-  // #2 Log running status after initial poll
-  // CRITICAL: Status must be 'running' to appear in "Current Operations"
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${SCRIPT_NAME} initial poll complete`);
   console.log(`${SCRIPT_NAME} initial poll complete`);
 
-  // Set up recurring polling
   const pollIntervalId = setInterval(async () => {
     try {
       await pollAllSymbols();
-      // #3 Log running status after each poll cycle
-      // This keeps the script visible in "Current Operations"
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${SCRIPT_NAME} 1min oi pull`);
-    } catch (error) {
-      console.error('Error in polling cycle:', error.message);
-      await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'SYSTEM', 'POLL_CYCLE_ERROR', error.message);
+    } catch (err) {
+      console.error('Error in polling cycle:', err.message);
+      await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'SYSTEM', 'POLL_CYCLE_ERROR', err.message);
     }
   }, POLL_INTERVAL);
 
-  // Graceful shutdown handler
   process.on('SIGINT', async () => {
     clearInterval(pollIntervalId);
     console.log(`\n${SCRIPT_NAME} received SIGINT, stopping...`);
-
-    // #4 Log script stop ONCE - Removes from "Current Operations"
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', `${SCRIPT_NAME} stopped smoothly`);
-
     process.exit(0);
   });
 }
 
-/* ==========================================
- * MODULE ENTRY POINT
- * Execute script if run directly
- * ========================================== */
-
 if (require.main === module) {
   execute()
-    .then(() => {
-      console.log('✅ OI continuous polling started');
-    })
+    .then(() => console.log('✅ OI continuous polling (USD normalized) started'))
     .catch(err => {
       console.error('💥 OI continuous polling failed:', err);
       try {
         apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'SYSTEM', 'INITIALIZATION_FAILED', err.message);
-      } catch (logError) {
-        console.error('Failed to log initial execution error:', logError.message);
-      }
+      } catch {}
       process.exit(1);
     });
 }

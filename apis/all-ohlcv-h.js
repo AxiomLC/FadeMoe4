@@ -1,59 +1,33 @@
-// SCRIPT: all-ohlcv-h.js 5 OCt 2025
+// SCRIPT: all-ohlcv-h7.js
 // Unified OHLCV Backfill Script for Binance, Bybit, and OKX
-// Optimized for maximum speed - no DB checks, no schema validation
-// Direct fetch → process → insert with ON CONFLICT DO NOTHING
-// MT Creation: Average closes from MT_SYMBOLS, insert as 'MT' under 'bin-ohlcv'
-// Simplified logging: Success/error only
+// Updated OKX to use /api/v5/market/history-candles with volume data
+// Added Final Loop MT for most recent MT token records
 
 const axios = require('axios');
 const dbManager = require('../db/dbsetup');
 const apiUtils = require('../api-utils');
 const perpList = require('../perp-list');
 const pLimit = require('p-limit');
+const NOW = Date.now();
 
-const SCRIPT_NAME = 'all-ohlcv-h.js';
+const SCRIPT_NAME = 'all-ohlcv-h7.js';
 const INTERVAL = '1m';
 const DAYS_TO_FETCH = 10;
 
-// ============================================================================
-// SHARED UTILITIES
-// ============================================================================
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// Retry utility for rate limits
-async function fetchWithRetry(url, options, maxRetries = 1) {
-  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
-    try {
-      return await axios.get(url, options);
-    } catch (error) {
-      if (error.response?.status === 429 && attempt <= maxRetries) {
-        await sleep(200); // Short sleep for limit
-      } else {
-        throw error;
-      }
-    }
-  }
-}
-
-// Target old ts (now - 10 days)
-function getTargetOldTs() {
-  return Date.now() - DAYS_TO_FETCH * 24 * 60 * 60 * 1000;
-}
+// User-adjustable final pull records count for ALL exchanges
+const RECENT_RECORDS_COUNT = 3; // Default 3 minutes - adjust as needed
 
 // ============================================================================
 // EXCHANGE CONFIGURATIONS
-// ⚡ SPEED SETTINGS: OKX concurrency=6 (faster bursts under limit)
+// ============================================================================
 const EXCHANGES = {
   BINANCE: {
     perpspec: 'bin-ohlcv',
     source: 'bin-ohlcv',
     url: 'https://fapi.binance.com/fapi/v1/klines',
-    limit: 1000,              // Max 1000
-    rateDelay: 200,           // Delay between requests
-    concurrency: 3,           // Parallel symbols
+    limit: 1450,
+    rateDelay: 200,
+    concurrency: 20,
     timeout: 10000,
     apiInterval: '1m',
     dbInterval: '1m',
@@ -64,9 +38,9 @@ const EXCHANGES = {
     perpspec: 'byb-ohlcv',
     source: 'byb-ohlcv',
     url: 'https://api.bybit.com/v5/market/kline',
-    limit: 1000,              // Max 1000
-    rateDelay: 200,           // Delay between requests
-    concurrency: 3,           // Parallel symbols
+    limit: 1000,
+    rateDelay: 200,
+    concurrency: 20,
     timeout: 10000,
     apiInterval: '1',
     dbInterval: '1m',
@@ -76,11 +50,12 @@ const EXCHANGES = {
   OKX: {
     perpspec: 'okx-ohlcv',
     source: 'okx-ohlcv',
-    url: 'https://www.okx.com/api/v5/market/history-mark-price-candles',
-    limit: 100,               // Max 100
-    rateDelay: 100,           // Delay between requests (under 20/2s limit)
-    concurrency: 6,           // Parallel symbols (6 bursts ~6/sec, under 10/sec)
-    timeout: 10000,
+    url: 'https://www.okx.com/api/v5/market/history-candles',
+    limit: 300,
+    rateDelay: 40,
+    concurrency: 5,
+    timeout: 9000,
+    retrySleepMs: 500,
     apiInterval: '1m',
     dbInterval: '1m',
     mapSymbol: sym => `${sym}-USDT-SWAP`,
@@ -91,21 +66,37 @@ const EXCHANGES = {
 // ============================================================================
 // MT CONFIGURATION
 // ============================================================================
-
-const MT_SYMBOLS = ['ETH', 'BTC', 'DOGE', 'XRP', 'SOL']; // Dynamic: Add/remove symbols here; avg = sum / length
-const MT_SYMBOL = 'MT'; // Insert as this symbol under 'bin-ohlcv'
+const MT_SYMBOLS = ['ETH', 'BTC', 'XRP', 'SOL'];
+const MT_SYMBOL = 'MT';
 
 // ============================================================================
-// FETCH FUNCTIONS (OKX Optimized: Prepend, after = oldest - 1ms, early break)
+// SHARED UTILITIES
 // ============================================================================
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-//=================BINANCE========================================
+function sortAndDeduplicateByTs(data) {
+  const seen = new Set();
+  return data
+    .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+    .filter(item => {
+      const ts = item[0];
+      if (seen.has(ts)) return false;
+      seen.add(ts);
+      return true;
+    });
+}
+
+// ============================================================================
+// FETCH FUNCTIONS
+// ===================fetchBinance=============================================
 async function fetchBinanceOHLCV(symbol, config) {
   const totalCandles = DAYS_TO_FETCH * 1440;
   const totalRequests = Math.ceil(totalCandles / config.limit);
 
   let allCandles = [];
-  let startTime = Date.now() - DAYS_TO_FETCH * 24 * 60 * 60 * 1000;
+  let startTime = NOW - DAYS_TO_FETCH * 24 * 60 * 60 * 1000;
 
   for (let i = 0; i < totalRequests; i++) {
     const params = {
@@ -137,14 +128,13 @@ async function fetchBinanceOHLCV(symbol, config) {
 
   return allCandles;
 }
-
-//=================BYBIT========================================
+//====================fetchBybit==========================================
 async function fetchBybitOHLCV(symbol, config) {
   const totalCandles = DAYS_TO_FETCH * 1440;
   const totalRequests = Math.ceil(totalCandles / config.limit);
 
   let allCandles = [];
-  let end = Date.now();
+  let end = NOW;
 
   for (let i = 0; i < totalRequests; i++) {
     const params = {
@@ -162,7 +152,6 @@ async function fetchBybitOHLCV(symbol, config) {
       if (!data.result?.list || data.result.list.length === 0) break;
 
       allCandles.push(...data.result.list);
-
       end = data.result.list[data.result.list.length - 1][0] - 1;
 
       await sleep(config.rateDelay);
@@ -175,47 +164,55 @@ async function fetchBybitOHLCV(symbol, config) {
   return allCandles;
 }
 
-//=================OKX========================================
+//========================fetchOKX======================================
+let okxRateLimitCount = 0;
+let okxLastRateLimitLog = Date.now();
+
 async function fetchOKXOHLCV(symbol, config) {
   const totalCandles = DAYS_TO_FETCH * 1440;
   const totalRequests = Math.ceil(totalCandles / config.limit);
   let allCandles = [];
-  let after = null; // Initial: null for latest 100
+  let after = null;
 
-  const targetOldTs = getTargetOldTs(); // Now - 10 days
+  const targetOldTs = NOW - DAYS_TO_FETCH * 24 * 60 * 60 * 1000;
 
   for (let i = 0; i < totalRequests; i++) {
     let url = `${config.url}?instId=${symbol}&bar=${config.apiInterval}&limit=${config.limit}`;
-    if (after !== null) url += `&after=${after}`; // After for earlier than ts
+    if (after !== null) url += `&after=${after}`;
 
     try {
-      const response = await fetchWithRetry(url, { timeout: config.timeout }, 1);
+      const response = await axios.get(url, { timeout: config.timeout });
       const data = response.data;
 
       if (data.code !== '0' || !data.data || data.data.length === 0) {
-        console.error(`❌ [${config.perpspec}] ${symbol}: Empty response (code: ${data.code || 'unknown'})`);
+        console.error(`❌ [${config.perpspec}] ${symbol}: Empty response`);
         break;
       }
 
-      // Prepend (response is newest first; prepend for backward chronological build)
-      allCandles = [...data.data, ...allCandles];
-
-      // Update after to oldest ts from this batch - 1ms (for next earlier batch)
-      const oldestTs = parseInt(data.data[data.data.length - 1][0]) - 1;
+      // Filter for confirmed candles only (index 8)
+      const confirmedCandles = data.data.filter(c => c[8] === '1');
+      allCandles = [...confirmedCandles, ...allCandles];
+      const oldestTs = confirmedCandles.length > 0
+        ? parseInt(confirmedCandles[confirmedCandles.length - 1][0]) - 1
+        : targetOldTs - 1;
       after = oldestTs;
 
-      // Break if batch < limit or oldest < target old
-      if (data.data.length < config.limit || oldestTs < targetOldTs) {
-        break;
-      }
+      if (confirmedCandles.length < config.limit || oldestTs < targetOldTs) break;
 
       await sleep(config.rateDelay);
     } catch (error) {
-      console.error(`❌ [${config.perpspec}] ${symbol}: ${error.message}`);
       if (error.response?.status === 429) {
-        await sleep(200);
-        i--; // Retry
+        okxRateLimitCount++;
+        const now = Date.now();
+        if (now - okxLastRateLimitLog >= 30000) {
+          console.warn(`[${config.perpspec}] Rate limit hit ${okxRateLimitCount} times in last 30s`);
+          okxRateLimitCount = 0;
+          okxLastRateLimitLog = now;
+        }
+        await sleep(config.retrySleepMs);
+        i--;
       } else {
+        console.error(`❌ [${config.perpspec}] ${symbol}: ${error.message}`);
         throw error;
       }
     }
@@ -227,106 +224,81 @@ async function fetchOKXOHLCV(symbol, config) {
 // ============================================================================
 // DATA PROCESSING FUNCTIONS
 // ============================================================================
-
-//=================BINANCE========================================
 function processBinanceData(rawCandles, baseSymbol, config) {
-  const result = [];
-
-  for (const candle of rawCandles) {
-    try {
-      const ts = apiUtils.toMillis(BigInt(candle[0]));
-      result.push({
-        ts,
-        symbol: baseSymbol,
-        source: config.source,
-        perpspec: config.perpspec,
-        interval: config.dbInterval,
-        o: parseFloat(candle[1]),
-        h: parseFloat(candle[2]),
-        l: parseFloat(candle[3]),
-        c: parseFloat(candle[4]),
-        v: parseFloat(candle[5])
-      });
-    } catch (e) {
-      // Skip invalid records
-    }
-  }
-
-  return result;
+  return rawCandles.map(candle => {
+    const ts = BigInt(candle[0]);
+    return {
+      ts,
+      symbol: baseSymbol,
+      source: config.source,
+      perpspec: config.perpspec,
+      interval: config.dbInterval,
+      o: parseFloat(candle[1]),
+      h: parseFloat(candle[2]),
+      l: parseFloat(candle[3]),
+      c: parseFloat(candle[4]),
+      v: parseFloat(candle[7]) // [7] (quoteVolume)
+    };
+  }).filter(item => item.ts !== undefined);
 }
 
-//=================BYBIT========================================
 function processBybitData(rawCandles, baseSymbol, config) {
-  const result = [];
-
-  for (const candle of rawCandles) {
-    try {
-      const ts = apiUtils.toMillis(BigInt(candle[0]));
-      result.push({
-        ts,
-        symbol: baseSymbol,
-        source: config.source,
-        perpspec: config.perpspec,
-        interval: config.dbInterval,
-        o: parseFloat(candle[1]),
-        h: parseFloat(candle[2]),
-        l: parseFloat(candle[3]),
-        c: parseFloat(candle[4]),
-        v: parseFloat(candle[5])
-      });
-    } catch (e) {
-      // Skip invalid records
-    }
-  }
-
-  return result;
+  return rawCandles.map(candle => {
+    const ts = BigInt(candle[0]);
+    return {
+      ts,
+      symbol: baseSymbol,
+      source: config.source,
+      perpspec: config.perpspec,
+      interval: config.dbInterval,
+      o: parseFloat(candle[1]),
+      h: parseFloat(candle[2]),
+      l: parseFloat(candle[3]),
+      c: parseFloat(candle[4]),
+      v: parseFloat(candle[6])
+    };
+  }).filter(item => item.ts !== undefined);
 }
 
-//=================OKX========================================
 function processOKXData(rawCandles, baseSymbol, config) {
-  const result = [];
-
-  for (const candle of rawCandles) {
-    try {
-      const ts = apiUtils.toMillis(BigInt(candle[0]));
-      result.push({
-        ts,
-        symbol: baseSymbol,
-        source: config.source,
-        perpspec: config.perpspec,
-        interval: config.dbInterval,
-        o: parseFloat(candle[1]),
-        h: parseFloat(candle[2]),
-        l: parseFloat(candle[3]),
-        c: parseFloat(candle[4]),
-        v: parseFloat(candle[5])
-      });
-    } catch (e) {
-      // Skip invalid records
-    }
-  }
-
-  return result;
+  return rawCandles.map(candle => {
+    const ts = BigInt(candle[0]);
+    return {
+      ts,
+      symbol: baseSymbol,
+      source: config.source,
+      perpspec: config.perpspec,
+      interval: config.dbInterval,
+      o: parseFloat(candle[1]),
+      h: parseFloat(candle[2]),
+      l: parseFloat(candle[3]),
+      c: parseFloat(candle[4]),
+      v: parseFloat(candle[7]) // Volume in quote currency $ USD
+    };
+  }).filter(item => item.ts !== undefined);
 }
 
 // ============================================================================
 // MT CREATION FUNCTION
 // ============================================================================
-// MT Creation: Average 1m closes across MT_SYMBOLS (dynamic count), insert as symbol='MT' under 'bin-ohlcv'
 async function createMTToken() {
   try {
-    console.log(`Creating MT token from ${MT_SYMBOLS.length} symbols...`);
-    const numSymbols = MT_SYMBOLS.length; // Dynamic count for avg
-
-    // Fetch 1m data for all MT symbols (reuse query style)
     const mtData = await Promise.all(MT_SYMBOLS.map(async (sym) => {
-      const query = `SELECT ts, c::numeric AS close FROM perp_data WHERE symbol = $1 AND perpspec = $2 AND interval = $3 ORDER BY ts ASC`;
-      const result = await dbManager.pool.query(query, [sym, 'bin-ohlcv', '1m']); // Assume bin-ohlcv schema
-      return result.rows.map(row => {
-        const ts = Number(apiUtils.toMillis(BigInt(row.ts))); // Convert BigInt to Number for JS ops
-        const close = parseFloat(row.close);
-        return { ts, close };
-      }).filter(p => !isNaN(p.ts) && !isNaN(p.close) && isFinite(p.close));
+      const query = `SELECT ts, o::numeric AS open, h::numeric AS high, l::numeric AS low, c::numeric AS close, v::numeric AS volume
+                     FROM perp_data
+                     WHERE symbol = $1 AND perpspec = $2 AND interval = $3
+                     ORDER BY ts ASC`;
+      const result = await dbManager.pool.query(query, [sym, 'bin-ohlcv', '1m']);
+      return result.rows.map(row => ({
+        ts: BigInt(row.ts),
+        open: parseFloat(row.open),
+        high: parseFloat(row.high),
+        low: parseFloat(row.low),
+        close: parseFloat(row.close),
+        volume: parseFloat(row.volume)
+      })).filter(p => !isNaN(p.open) && !isNaN(p.high) &&
+                     !isNaN(p.low) && !isNaN(p.close) &&
+                     !isNaN(p.volume));
     }));
 
     if (mtData.some(data => data.length === 0)) {
@@ -334,154 +306,337 @@ async function createMTToken() {
       return;
     }
 
-    // Align by unique ts across all MT data (union ts, forward-fill per symbol)
-    const allTs = [...new Set(mtData.flatMap(data => data.map(p => p.ts)))].sort((a, b) => a - b); // Numbers now
+    const allTs = [...new Set(mtData.flatMap(data => data.map(p => p.ts.toString())))].sort();
     const mtRecords = allTs.map(ts => {
-      let totalClose = 0, count = 0;
+      const tsBigInt = BigInt(ts);
+      let totalO = 0, totalH = 0, totalL = 0, totalC = 0, totalV = 0;
+      let count = 0;
+
       for (const data of mtData) {
-        // Find closest <= ts (forward-fill)
-        let lastValidClose = null;
+        let lastValid = null;
         for (const p of data) {
-          if (p.ts <= ts) lastValidClose = p.close;
+          if (p.ts <= tsBigInt) lastValid = p;
           else break;
         }
-        if (lastValidClose !== null) {
-          totalClose += lastValidClose;
+        if (lastValid) {
+          totalO += lastValid.open;
+          totalH += lastValid.high;
+          totalL += lastValid.low;
+          totalC += lastValid.close;
+          totalV += lastValid.volume;
           count++;
         }
       }
-      const avgClose = count > 0 ? totalClose / count : null; // Dynamic avg
-      if (avgClose === null) return null; // Skip if no valid data
 
-      // Insert as OHLCV (o=h=l=c=avg, v=0 or sum if you fetch volume)
+      if (count === 0) return null;
+
       return {
-        ts: BigInt(Math.round(ts)), // Back to BigInt for DB insert
+        ts: tsBigInt,
         symbol: MT_SYMBOL,
-        source: 'bin-ohlcv', // Match schema
+        source: 'bin-ohlcv',
         perpspec: 'bin-ohlcv',
         interval: '1m',
-        o: avgClose, h: avgClose, l: avgClose, c: avgClose, v: 0 // v=0 or sum if you fetch volume
+        o: totalO / count,
+        h: totalH / count,
+        l: totalL / count,
+        c: totalC / count,
+        v: totalV
       };
     }).filter(record => record !== null);
 
-    if (mtRecords.length === 0) {
-      console.error('No MT records generated—skipping insert');
+    if (mtRecords.length > 0) {
+      await dbManager.insertData('bin-ohlcv', mtRecords);
+      console.log('✅ MT token created successfully');
+    }
+  } catch (error) {
+    console.error('❌ MT creation failed:', error.message);
+  }
+}
+
+// ============================================================================
+// FINAL LOOP FUNCTIONS
+// ============================================================================
+
+// Special Bybit final loop that gets the most recent records
+async function fetchBybitFinalLoop(symbol, config) {
+  const now = Date.now();
+  const startTs = now - (RECENT_RECORDS_COUNT * 60 * 1000);
+
+  try {
+    const params = {
+      category: 'linear',
+      symbol: symbol,
+      interval: config.apiInterval,
+      limit: config.limit,
+      start: startTs,
+      end: now
+    };
+
+    const response = await axios.get(config.url, { params, timeout: config.timeout });
+    const data = response.data;
+
+    if (!data.result?.list || data.result.list.length === 0) {
+      return [];
+    }
+
+    let recentCandles = data.result.list;
+
+    // If we don't have enough confirmed candles, get the most recent ones regardless
+    if (recentCandles.filter(c => c[8] === true).length < RECENT_RECORDS_COUNT) {
+      const recentParams = {
+        category: 'linear',
+        symbol: symbol,
+        interval: config.apiInterval,
+        limit: 5
+      };
+
+      const recentResponse = await axios.get(config.url, { params: recentParams, timeout: config.timeout });
+      if (recentResponse.data.result?.list) {
+        const supplemental = recentResponse.data.result.list
+          .filter(c => parseInt(c[0]) > startTs)
+          .slice(0, RECENT_RECORDS_COUNT);
+
+        recentCandles = [...recentCandles, ...supplemental];
+        recentCandles = sortAndDeduplicateByTs(recentCandles);
+      }
+    }
+
+    return recentCandles;
+  } catch (error) {
+    console.error(`❌ [BYBIT] Final loop error for ${symbol}: ${error.message}`);
+    return [];
+  }
+}
+
+async function fetchOKXFinalLoop(symbol, config, startTs, endTs) {
+  let allCandles = [];
+  let before = null;
+  const maxAttempts = 3;
+  const OKX_CONFIRMATION_DELAY = 5 * 60 * 1000;
+  const adjustedStartTs = startTs - OKX_CONFIRMATION_DELAY;
+  const adjustedEndTs = endTs + OKX_CONFIRMATION_DELAY;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      let url = `${config.url}?instId=${symbol}&bar=${config.apiInterval}&limit=${config.limit}`;
+      if (before !== null) url += `&before=${before}`;
+
+      const response = await axios.get(url, { timeout: config.timeout });
+      const data = response.data;
+
+      if (data.code !== '0' || !data.data) {
+        throw new Error(`API error: ${data.msg || 'Unknown error'}`);
+      }
+
+      const confirmedCandles = data.data
+        .filter(c => c[8] === '1' &&
+               parseInt(c[0]) >= adjustedStartTs &&
+               parseInt(c[0]) <= adjustedEndTs);
+
+      if (confirmedCandles.length === 0) {
+        if (attempt === maxAttempts - 1) return [];
+        await sleep(1000);
+        continue;
+      }
+
+      allCandles = [...confirmedCandles, ...allCandles];
+      const oldestTs = parseInt(confirmedCandles[confirmedCandles.length - 1][0]);
+      if (oldestTs <= adjustedStartTs || confirmedCandles.length < config.limit) break;
+
+      before = oldestTs - 1;
+      await sleep(config.rateDelay);
+
+    } catch (error) {
+      if (error.response?.status === 429) {
+        await sleep(config.retrySleepMs);
+        continue;
+      } else if (attempt === maxAttempts - 1) {
+        console.error(`❌ [OKX] Final loop error for ${symbol}: ${error.message}`);
+        return [];
+      }
+      await sleep(1000);
+    }
+  }
+
+  return allCandles;
+}
+
+async function fetchRecentData(config) {
+  const limit = pLimit(config.concurrency);
+  const now = Date.now();
+  const recentPromises = [];
+
+  const startTs = now - (RECENT_RECORDS_COUNT * 60 * 1000);
+  const endTs = now;
+
+  for (const baseSym of perpList) {
+    recentPromises.push(limit(async () => {
+      const symbol = config.mapSymbol(baseSym);
+      try {
+        // Use specialized final loop functions
+        const fetchFunc = config.perpspec === 'okx-ohlcv' ? fetchOKXFinalLoop :
+                         config.perpspec === 'byb-ohlcv' ? fetchBybitFinalLoop :
+                         config.fetch;
+
+        let rawCandles = config.perpspec === 'okx-ohlcv'
+          ? await fetchFunc(symbol, config, startTs, endTs)
+          : await fetchFunc(symbol, config);
+
+        if (rawCandles.length === 0) return;
+
+        // Filter and process based on exchange
+        if (config.perpspec === 'okx-ohlcv') {
+          rawCandles = rawCandles.filter(c => c[8] === '1');
+        }
+
+        rawCandles = sortAndDeduplicateByTs(rawCandles);
+
+        const processedData = (config.perpspec === 'bin-ohlcv') ? processBinanceData(rawCandles, baseSym, config) :
+                            (config.perpspec === 'byb-ohlcv') ? processBybitData(rawCandles, baseSym, config) :
+                            processOKXData(rawCandles, baseSym, config);
+
+        if (processedData.length > 0) {
+          await dbManager.insertData(config.perpspec, processedData);
+        }
+      } catch (error) {
+        console.error(`❌ [${config.perpspec}] ${baseSym} recent fetch error: ${error.message}`);
+      }
+    }));
+  }
+
+  await Promise.all(recentPromises);
+}
+
+// ============================================================================
+// FINAL LOOP MT - CREATE MOST RECENT MT RECORDS
+// ============================================================================
+async function createMTTokenFinalLoop() {
+  try {
+    console.log('🔄 Creating final MT token records...');
+    
+    const now = Date.now();
+    const startTs = now - (2 * 60 * 1000); // hardcoded to 2 , to finich script
+
+    // Fetch most recent data for all MT component symbols
+    const mtData = await Promise.all(MT_SYMBOLS.map(async (sym) => {
+      const query = `SELECT ts, o::numeric AS open, h::numeric AS high, l::numeric AS low, c::numeric AS close, v::numeric AS volume
+                     FROM perp_data
+                     WHERE symbol = $1 AND perpspec = $2 AND interval = $3 AND ts >= $4
+                     ORDER BY ts ASC`;
+      const result = await dbManager.pool.query(query, [sym, 'bin-ohlcv', '1m', startTs.toString()]);
+      return result.rows.map(row => ({
+        ts: BigInt(row.ts),
+        open: parseFloat(row.open),
+        high: parseFloat(row.high),
+        low: parseFloat(row.low),
+        close: parseFloat(row.close),
+        volume: parseFloat(row.volume)
+      })).filter(p => !isNaN(p.open) && !isNaN(p.high) &&
+                     !isNaN(p.low) && !isNaN(p.close) &&
+                     !isNaN(p.volume));
+    }));
+
+    if (mtData.some(data => data.length === 0)) {
+      console.warn('⚠️  Missing recent data for some MT symbols—skipping final MT creation');
       return;
     }
 
-    // Bulk insert with ON CONFLICT DO NOTHING (fills gaps, skips duplicates)
-    await dbManager.insertData('bin-ohlcv', mtRecords);
-    console.log(`✅ Created ${mtRecords.length} MT records under 'bin-ohlcv'`);
+    // Get all unique timestamps from recent data
+    const allTs = [...new Set(mtData.flatMap(data => data.map(p => p.ts.toString())))].sort();
+    
+    const mtRecords = allTs.map(ts => {
+      const tsBigInt = BigInt(ts);
+      let totalO = 0, totalH = 0, totalL = 0, totalC = 0, totalV = 0;
+      let count = 0;
+
+      for (const data of mtData) {
+        let lastValid = null;
+        for (const p of data) {
+          if (p.ts <= tsBigInt) lastValid = p;
+          else break;
+        }
+        if (lastValid) {
+          totalO += lastValid.open;
+          totalH += lastValid.high;
+          totalL += lastValid.low;
+          totalC += lastValid.close;
+          totalV += lastValid.volume;
+          count++;
+        }
+      }
+
+      if (count === 0) return null;
+
+      return {
+        ts: tsBigInt,
+        symbol: MT_SYMBOL,
+        source: 'bin-ohlcv',
+        perpspec: 'bin-ohlcv',
+        interval: '1m',
+        o: totalO / count,
+        h: totalH / count,
+        l: totalL / count,
+        c: totalC / count,
+        v: totalV
+      };
+    }).filter(record => record !== null);
+
+    if (mtRecords.length > 0) {
+      await dbManager.insertData('bin-ohlcv', mtRecords);
+      console.log(`✅ Final MT token records created: ${mtRecords.length} records`);
+    } else {
+      console.warn('⚠️  No MT records to create in final loop');
+    }
   } catch (error) {
-    console.error('❌ MT creation failed:', error.message);
-    // Optional: Log via apiUtils if needed
+    console.error('❌ Final MT creation failed:', error.message);
   }
 }
 
 // ============================================================================
 // MAIN BACKFILL FUNCTION
 // ============================================================================
-
 async function backfill() {
   const startTime = Date.now();
 
   console.log(`\n🚀 Starting ${SCRIPT_NAME} backfill for OHLCV data...`);
+  console.log(`📊 Using ${RECENT_RECORDS_COUNT} minutes for final pull records`);
+  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `Starting ${SCRIPT_NAME} backfill`);
 
-  const perpspecs = Object.values(EXCHANGES).map(ex => ex.perpspec).join(', ');
+  // Heartbeat logging
+  const heartbeatInterval = setInterval(async () => {
+    const activeExchanges = Object.values(EXCHANGES).map(ex => ex.perpspec);
+    const msg = `${activeExchanges.join(', ')} still backfilling`;
+    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg);
+  }, 30000);
 
-  // STATUS #1: Starting
-  await apiUtils.logScriptStatus(
-    dbManager,
-    SCRIPT_NAME,
-    'running',
-    `${SCRIPT_NAME} backfill`
-  );
-  await apiUtils.logScriptStatus(
-    dbManager,
-    SCRIPT_NAME,
-    'started',
-    `Starting ${SCRIPT_NAME} backfill for OHLCV data for ${perpspecs}.`
-  );
-
-  // Track connection status per exchange
-  const connectedLogged = {};
-  for (const exKey of Object.keys(EXCHANGES)) {
-    connectedLogged[EXCHANGES[exKey].perpspec] = false;
-  }
-
+  // Main backfill
   const promises = [];
-
-  // Process each exchange
   for (const exKey of Object.keys(EXCHANGES)) {
     const config = EXCHANGES[exKey];
     const limit = pLimit(config.concurrency);
-
-    // Assign processing function based on exchange
-    let processFunc;
-    if (exKey === 'BINANCE') processFunc = processBinanceData;
-    else if (exKey === 'BYBIT') processFunc = processBybitData;
-    else if (exKey === 'OKX') processFunc = processOKXData;
+    const processFunc = exKey === 'BINANCE' ? processBinanceData :
+                       exKey === 'BYBIT' ? processBybitData :
+                       processOKXData;
 
     for (const baseSymbol of perpList) {
       promises.push(limit(async () => {
         const symbol = config.mapSymbol(baseSymbol);
-
         try {
-          // STATUS #2: Log connected on first successful start
-          if (!connectedLogged[config.perpspec]) {
-            await apiUtils.logScriptStatus(
-              dbManager,
-              SCRIPT_NAME,
-              'connected',
-              `${config.perpspec} connected, starting fetch for ${baseSymbol}`
-            );
-            connectedLogged[config.perpspec] = true;
-          }
-
-          // Fetch OHLCV data
           const rawCandles = await config.fetch(symbol, config);
-
           if (rawCandles.length === 0) return;
 
-          // Process data
-          const processedData = processFunc(rawCandles, baseSymbol, config);
+          // Filter for confirmed candles where needed
+          let processedCandles = rawCandles;
+          if (config.perpspec === 'okx-ohlcv') {
+            processedCandles = rawCandles.filter(c => c[8] === '1');
+          }
 
+          const processedData = processFunc(processedCandles, baseSymbol, config);
           if (processedData.length === 0) return;
 
-          // Insert to DB (ON CONFLICT DO NOTHING handles duplicates)
           await dbManager.insertData(config.perpspec, processedData);
-
-          console.log(`✅ [${config.perpspec}] ${baseSymbol}: ${processedData.length} records`);
-
         } catch (error) {
           console.error(`❌ [${config.perpspec}] ${baseSymbol}: ${error.message}`);
-
-          // Determine error type
-          const errorCode = error.response?.status === 429 ? 'RATE_LIMIT' :
-                           error.message.includes('timeout') ? 'TIMEOUT' :
-                           error.response?.status === 400 || error.response?.status === 404 ? 'INVALID_SYMBOL' : 'FETCH_ERROR';
-
-          // Log error
-          await apiUtils.logScriptError(
-            dbManager,
-            SCRIPT_NAME,
-            'API',
-            errorCode,
-            `${config.perpspec} error for ${baseSymbol}: ${error.message}`,
-            { perpspec: config.perpspec, symbol: baseSymbol }
-          );
-
-          // Log internal error if connection never established
-          if (!connectedLogged[config.perpspec]) {
-            await apiUtils.logScriptError(
-              dbManager,
-              SCRIPT_NAME,
-              'INTERNAL',
-              'INSERT_FAILED',
-              `${config.perpspec} failed to establish connection for ${baseSymbol}`,
-              { perpspec: config.perpspec, symbol: baseSymbol }
-            );
-          }
         }
       }));
     }
@@ -489,19 +644,39 @@ async function backfill() {
 
   await Promise.all(promises);
 
-  // Create MT token after all individual backfills (ensures data loaded)
+  // MT token creation after normal run
+  console.log('🔧 Creating MT token...');
   await createMTToken();
 
-  // STATUS #3: Complete per exchange
+  // Final loop - linear execution: Binance → Bybit → OKX
+  clearInterval(heartbeatInterval);
+  console.log('🔄 Running final loops in sequence...');
+
+  try {
+    // 1. Binance first
+    console.log('📥 Running Binance final loop...');
+    await fetchRecentData(EXCHANGES.BINANCE);
+
+    // 2. Bybit with special handling
+    console.log('📥 Running Bybit final loop...');
+    await fetchRecentData(EXCHANGES.BYBIT);
+
+    // 3. OKX last with special handling
+    console.log('📥 Running OKX final loop...');
+    await fetchRecentData(EXCHANGES.OKX);
+
+    // 4. Final MT Loop - create most recent MT records
+    console.log('📥 Running Final Loop MT...');
+    await createMTTokenFinalLoop();
+
+  } catch (error) {
+    console.error('❌ Error during final loops:', error);
+  }
+
+  // Completion
   for (const exKey of Object.keys(EXCHANGES)) {
     const config = EXCHANGES[exKey];
-    await apiUtils.logScriptStatus(
-      dbManager,
-      SCRIPT_NAME,
-      'complete',
-      `${config.perpspec} backfill complete.`
-    );
-    console.log(`✅ ${config.perpspec} backfill complete.`);
+    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'complete', `${config.perpspec} backfill complete`);
   }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
@@ -511,7 +686,6 @@ async function backfill() {
 // ============================================================================
 // MODULE ENTRY POINT
 // ============================================================================
-
 if (require.main === module) {
   backfill()
     .then(() => {

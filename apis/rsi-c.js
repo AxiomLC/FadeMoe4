@@ -1,10 +1,10 @@
 /* ==========================================
- * rsi-c.js - Continuous RSI Polling Script
- * Polls new 1m data from bin-ohlcv, computes RSI11 (rsi1) and RSI11 on 60m agg (rsi60)
+ * rsi-c.js - 9 Oct 2025 Continuous RSI Polling Script
+ * Polls new 1m data from bin-ohlcv, computes RSI11 (rsi1) and RSI11 on rolling 60min agg (rsi60)
  * Inserts into rsi perpspec/source at 1m intervals (ON CONFLICT DO NOTHING)
  * Assumes backfill done via rsi9.js; incremental cache for efficiency
  * Hardcoded PERIOD=11 at top, like -h files
- * Fix: Load last 20min data on startup for immediate RSI (no 11-min lag)
+ * Fix: Rolling 60min agg for present-time rsi60 (updates every min from last ~60min 1m data)
  * ========================================== */
 
 const { Pool } = require('pg');
@@ -13,15 +13,16 @@ require('dotenv').config();
 const apiUtils = require('../api-utils'); // For status logging
 const dbManager = require('../db/dbsetup'); // For insertData (from dbsetup.js)
 
-const SCRIPT_NAME = 'rsi-c2.js';
+const SCRIPT_NAME = 'rsi-c.js';
 const PERIOD = 11; // Hardcoded RSI period
 const POLL_INTERVAL = 60 * 1000; // 1min polling
-const CACHE_SIZE = 100; // Cache last N bars/symbol for RSI (efficient for live)
+const CACHE_SIZE = 1440; // Cache last 1 day 1m bars/symbol for history (rsi1) and rolling 60m (rsi60)
 const PERPSPEC_SOURCE = 'rsi';
 const DATA_PERPSPEC = 'bin-ohlcv';
 const INTERVAL = '1m';
-const AGGREGATE_MINUTES = 60; // For rsi60 aggregation
-const BUCKET_SIZE_MS = AGGREGATE_MINUTES * 60 * 1000;
+const ROLLING_WINDOW_MIN = 60; // For initial fetch
+const INITIAL_WINDOW_MS = 24 * 60 * 60 * 1000; // 1 day for initial cache fill
+const ROLLING_HOURS = 24; // Use last 24 hours of 1m for ~24 60m bars in rsi60
 
 // Database pool
 const pool = new Pool({
@@ -35,8 +36,8 @@ const pool = new Pool({
   idleTimeoutMillis: 30000
 });
 
-// In-memory cache: { symbol: { '1m': [prices], '60m': [prices] } }
-let priceCache = new Map(); // { symbol: { '1m': array of {ts, close}, '60m': array } }
+// In-memory cache: { symbol: [array of {ts, close}] } - 1m only (agg on-the-fly)
+let priceCache = new Map(); // { symbol: array of {ts, close} }
 
 /* ==========================================
  * UTILITY FUNCTIONS
@@ -55,17 +56,15 @@ async function getSymbols() {
   }
 }
 
-// Fetch recent 1m data (last 20min on startup for immediate RSI, then 2min polls)
+// Fetch recent 1m data (initial: last 1 day for full cache; polls: last 2min incremental)
 async function fetchRecentData(symbol) {
   try {
-    // Initial load: Last 20min for immediate RSI (enough for PERIOD=11)
-    // Subsequent polls: Last 2min (incremental)
-    const timeWindow = priceCache.has(symbol) ? 120000 : 1200000; // 2min or 20min
+    const timeWindow = priceCache.has(symbol) ? 2 * 60 * 1000 : INITIAL_WINDOW_MS; // 2min poll or 1 day initial
     const query = `
       SELECT ts, c::numeric AS close
       FROM perp_data
       WHERE symbol = $1 AND perpspec = $2 AND interval = $3
-      AND ts > (SELECT MAX(ts) FROM perp_data WHERE symbol = $1 AND perpspec = $2 AND interval = $3) - $4  -- Dynamic window
+      AND ts > (SELECT COALESCE(MAX(ts), 0) FROM perp_data WHERE symbol = $1 AND perpspec = $2 AND interval = $3) - $4
       ORDER BY ts ASC
     `;
     const result = await pool.query(query, [symbol, DATA_PERPSPEC, INTERVAL, timeWindow]);
@@ -83,97 +82,117 @@ async function fetchRecentData(symbol) {
   }
 }
 
-// Append new data to cache, compute RSI1 (on 1m cache)
+// Append new data to cache, keep last CACHE_SIZE
+function updateCache(cache, newPrices) {
+  cache.push(...newPrices);
+  // Sort and trim to last CACHE_SIZE (latest data)
+  cache.sort((a, b) => a.ts.getTime() - b.ts.getTime());
+  if (cache.length > CACHE_SIZE) cache.splice(0, cache.length - CACHE_SIZE);
+  return cache;
+}
+
+// Compute RSI11 on 1m cache (rsi1 - present time)
 function computeRSI1(cachedPrices, newPrices) {
-  const allPrices = [...cachedPrices, ...newPrices].sort((a, b) => a.ts.getTime() - b.ts.getTime());
-  // Keep only last CACHE_SIZE
-  if (allPrices.length > CACHE_SIZE) allPrices.splice(0, allPrices.length - CACHE_SIZE);
+  const allPrices = updateCache(cachedPrices, newPrices);  // Update in place
+  if (allPrices.length < PERIOD + 1) return [];
   return calculateRSI(allPrices, PERIOD);
 }
 
-// Aggregate cached 1m to 60m (last close per bucket)
-function aggregateTo60m(cachedPrices) {
+// Rolling 60m agg for rsi60: Resample last ~24hrs 1m to hourly bars (last close per hour, current hour = latest close)
+function getRolling60mSeries(cachedPrices) {
   if (cachedPrices.length === 0) return [];
-  let agg = [], bucketStart = null, lastClose = null, lastTs = null;
-  for (const price of cachedPrices) {
-    const tsMs = price.ts.getTime(); if (isNaN(tsMs)) continue;
-    const bucket = Math.floor(tsMs / BUCKET_SIZE_MS) * BUCKET_SIZE_MS;
-    if (bucket !== bucketStart) {
-      if (bucketStart !== null && lastTs !== null) {
-        const endTs = new Date(bucketStart + BUCKET_SIZE_MS - 1);
-        if (!isNaN(endTs.getTime())) agg.push({ ts: endTs, close: lastClose });
-      }
-      bucketStart = bucket; lastTs = tsMs; lastClose = price.close;
-    } else { lastTs = tsMs; lastClose = price.close; }
+  const sorted = [...cachedPrices].sort((a, b) => a.ts.getTime() - b.ts.getTime());
+  const hourlyMap = new Map(); // key: hourStartMs, value: {ts: lastTsInHour, close: lastClose}
+  for (let p of sorted) {
+    const tsMs = p.ts.getTime();
+    const hourStartMs = tsMs - (tsMs % (60 * 60 * 1000)); // Floor to hour start
+    const key = hourStartMs;
+    const existing = hourlyMap.get(key);
+    if (!existing || p.ts.getTime() > existing.ts.getTime()) {
+      hourlyMap.set(key, { ts: p.ts, close: p.close });
+    }
   }
-  if (bucketStart !== null && lastTs !== null) {
-    const endTs = new Date(bucketStart + BUCKET_SIZE_MS - 1);
-    if (!isNaN(endTs.getTime())) agg.push({ ts: endTs, close: lastClose });
-  }
-  return agg;
+  let hourlyArray = Array.from(hourlyMap.values()).sort((a, b) => a.ts.getTime() - b.ts.getTime());
+  // Filter to last 24 hours for ~24 hourly bars
+  const nowMs = Date.now();
+  const startMs = nowMs - ROLLING_HOURS * 60 * 60 * 1000;
+  hourlyArray = hourlyArray.filter(h => h.ts.getTime() >= startMs);
+  return hourlyArray;
 }
 
-// Compute RSI on prices (from test-rsi9.js)
+// Compute RSI on prices (standard Wilder RSI: initial SMA, then smoothed)
 function calculateRSI(prices, period) {
   if (prices.length < period + 1) return [];
-  let gains = 0, losses = 0, rsiValues = [];
-  for (let i = 1; i < prices.length; i++) {
+  let rsiValues = [];
+  // Initial SMA over first period changes
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
     const change = prices[i].close - prices[i - 1].close;
-    if (change > 0) gains += change; else losses += Math.abs(change);
-    if (i >= period) {
-      const avgGain = gains / period, avgLoss = losses / period;
-      const rs = avgGain / (avgLoss === 0 ? 1 : avgLoss);
-      const rsi = 100 - (100 / (1 + rs));
-      rsiValues.push({ ts: prices[i].ts, rsi: Math.round(rsi) });
-      const prevChange = prices[i - period + 1].close - prices[i - period].close;
-      if (prevChange > 0) gains -= prevChange; else losses -= Math.abs(prevChange);
-    }
+    if (change > 0) gains += change;
+    else losses += Math.abs(change);
+  }
+  let avgGain = gains / period;
+  let avgLoss = losses / period || 1e-10; // Avoid div by zero
+  let rs = avgGain / avgLoss;
+  let rsi = 100 - (100 / (1 + rs));
+  rsiValues.push({ 
+    ts: prices[period].ts, 
+    rsi: Math.round(rsi * 100) / 100  // 2 decimals
+  });
+  // Smoothed for subsequent periods
+  for (let i = period + 1; i < prices.length; i++) {
+    const change = prices[i].close - prices[i - 1].close;
+    const gain = change > 0 ? change : 0;
+    const loss = change < 0 ? Math.abs(change) : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period || 1e-10;
+    rs = avgGain / avgLoss;
+    rsi = 100 - (100 / (1 + rs));
+    rsiValues.push({ 
+      ts: prices[i].ts, 
+      rsi: Math.round(rsi * 100) / 100 
+    });
   }
   return rsiValues;
 }
 
-// Poll one symbol: Fetch recent, append to cache, compute rsi1/rsi60, insert new
+// Poll one symbol: Fetch recent, update cache, compute rsi1/rsi60, insert at present ts
 async function pollSymbol(symbol) {
   try {
     const newPrices = await fetchRecentData(symbol);
     if (newPrices.length === 0) return; // No new data
 
-    // Append to cache
-    if (!priceCache.has(symbol)) priceCache.set(symbol, { '1m': [], '60m': [] });
-    const cache = priceCache.get(symbol);
-    cache['1m'].push(...newPrices);
-    // Keep only last CACHE_SIZE for efficiency
-    if (cache['1m'].length > CACHE_SIZE) cache['1m'].splice(0, cache['1m'].length - CACHE_SIZE);
+    // Initialize/update cache
+    if (!priceCache.has(symbol)) priceCache.set(symbol, []);
+    const cachedPrices = priceCache.get(symbol);
 
-    // Compute rsi1 (RSI11 on 1m cache)
-    const rsi1Values = computeRSI1(cache['1m'], newPrices);
+    // Compute rsi1 (RSI11 on full 1m cache)
+    const rsi1Values = computeRSI1(cachedPrices, newPrices);
     if (rsi1Values.length === 0) return;
 
-    // Compute rsi60 (aggregate cache to 60m, RSI11 on that)
-    const agg60m = aggregateTo60m(cache['1m']);
-    const rsi60Values = calculateRSI(agg60m, PERIOD);
+    // Compute rsi60 (RSI11 on rolling hourly 60m series from updated cache)
+    const rolling60m = getRolling60mSeries(cachedPrices);
+    const rsi60Values = calculateRSI(rolling60m, PERIOD);
 
-    // Prepare insert data (forward-fill rsi60 to 1m ts from rsi1)
-    rsi60Values.sort((a, b) => a.ts.getTime() - b.ts.getTime());
-    const insertionData = []; let rsi60Pointer = 0, currentRsi60 = null;
-    for (const rsi1Entry of rsi1Values) {
-      const currentTsMs = rsi1Entry.ts.getTime();
-      while (rsi60Pointer < rsi60Values.length && rsi60Values[rsi60Pointer].ts.getTime() <= currentTsMs) {
-        currentRsi60 = rsi60Values[rsi60Pointer].rsi;
-        rsi60Pointer++;
-      }
-      insertionData.push({
-        rsi1: rsi1Entry.rsi,
-        rsi60: currentRsi60,
-        tsMs: currentTsMs
-      });
-    }
+    // Get latest (present) values: Last rsi1 and last rsi60 (or null if insufficient)
+    const latestRsi1 = rsi1Values[rsi1Values.length - 1];
+    const latestRsi60 = rsi60Values.length > 0 ? rsi60Values[rsi60Values.length - 1] : { rsi: null };
 
-    if (insertionData.length === 0) return;
+    // Insert at present ts (latest 1m ts, with both RSIs)
+    const presentTs = latestRsi1.ts.getTime();
+    const insertData = [{
+      ts: BigInt(presentTs),
+      symbol: symbol,
+      source: PERPSPEC_SOURCE,
+      perpspec: PERPSPEC_SOURCE,
+      interval: INTERVAL,
+      rsi1: latestRsi1.rsi,
+      rsi60: latestRsi60.rsi  // Present rsi60 from rolling hourly agg
+    }];
 
-    const values = insertionData.map(data => [data.rsi1, data.rsi60, data.tsMs, symbol, PERPSPEC_SOURCE, PERPSPEC_SOURCE, INTERVAL]);
-    const upsertQuery = format(`INSERT INTO perp_data (rsi1, rsi60, ts, symbol, source, perpspec, interval) VALUES %L ON CONFLICT (ts, symbol, source) DO NOTHING`, values);
-    await pool.query(upsertQuery);
+    // Bulk insert (single row per poll, ON CONFLICT DO NOTHING)
+    await dbManager.insertData(PERPSPEC_SOURCE, insertData);
+
   } catch (error) {
     console.error(`Error polling ${symbol}:`, error.message);
     await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'POLL', 'SYMBOL_ERROR', error.message, { symbol });
@@ -195,21 +214,26 @@ async function pollAllSymbols() {
 async function execute() {
   console.log(`🚀 Starting ${SCRIPT_NAME} - Continuous RSI polling`);
   // Status: started
-  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);
+  const startMsg = `${SCRIPT_NAME} connected`;
+  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', startMsg);
+  console.log(startMsg);
 
-  // Initial poll
+  // Initial poll (loads 1 day for full cache)
   await pollAllSymbols();
 
   // Status: running after initial
-  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${SCRIPT_NAME} initial poll complete`);
-  console.log(`${SCRIPT_NAME} initial poll complete`);
+  const initialMsg = `${SCRIPT_NAME} initial poll complete`;
+  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', initialMsg);
+  console.log(initialMsg);
 
   // Polling loop
   const pollIntervalId = setInterval(async () => {
     try {
       await pollAllSymbols();
       // Status: running after each cycle
-      await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${SCRIPT_NAME} 1min rsi pull complete`);
+      const cycleMsg = `${SCRIPT_NAME} 1min rsi pull complete`;
+      await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', cycleMsg);
+      console.log(cycleMsg);
     } catch (error) {
       console.error('Error in polling cycle:', error.message);
       await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'SYSTEM', 'POLL_CYCLE_ERROR', error.message);
@@ -220,7 +244,9 @@ async function execute() {
   process.on('SIGINT', async () => {
     clearInterval(pollIntervalId);
     console.log(`\n${SCRIPT_NAME} received SIGINT, stopping...`);
-    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', `${SCRIPT_NAME} stopped smoothly`);
+    const stopMsg = `${SCRIPT_NAME} stopped smoothly`;
+    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', stopMsg);
+    console.log(stopMsg);
     await pool.end();
     process.exit(0);
   });
