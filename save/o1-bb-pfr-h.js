@@ -1,4 +1,4 @@
-// SCRIPT: all-pfr-bbh.js  12 Oct 2025
+// SCRIPT: bb-pfr-h.js  12 Oct 2025
 // Unified Premium Funding Rate Backfill Script for Binance and Bybit
 // Version: Binance/Bybit only, single slice for conservative backfill
 
@@ -8,7 +8,8 @@ const apiUtils = require('../api-utils');
 const perpList = require('../perp-list');
 const pLimit = require('p-limit');
 
-const SCRIPT_NAME = 'all-pfr-bbh.js';
+const SCRIPT_NAME = 'bb-pfr-h.js';
+const weightMonitor = require('../b-weight');
 
 // ============================================================================
 // USER SPEED SETTINGS (adjust these for performance tuning)
@@ -16,9 +17,9 @@ const SCRIPT_NAME = 'all-pfr-bbh.js';
 const DAYS = 10;                      // Number of days back to fill
 const SLICE_HOURS = 12;               // Size of each slice (12h typical)
 const NUM_SLICES = 1;                 // Number of slices (1 for conservative)
-const BIN_BYB_CONCURRENCY = 20;       // Binance/Bybit concurrency
+const BIN_BYB_CONCURRENCY = 12;       // Binance/Bybit concurrency
 const TIMEOUT_MS = 10000;             // HTTP request timeout
-const RATE_DELAY = 50;                 // Global throttle, normally 0
+const RATE_DELAY = 100;                 // Global throttle, normally 0
 const HEARTBEAT_INTERVAL = 10000;     // 10s heartbeat interval
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -39,7 +40,7 @@ const EXCHANGES = {
   BINANCE: {
     perpspec: 'bin-pfr',
     url: 'https://fapi.binance.com/fapi/v1/premiumIndexKlines',
-    limit: 1400,
+    limit: 1000,
     concurrency: BIN_BYB_CONCURRENCY,
     apiInterval: '1m',
     mapSymbol: s => `${s}USDT`,
@@ -72,11 +73,12 @@ async function fetchBinancePFR(symbol, config, startTs, endTs) {
     for (let t = sliceStart; t < sliceEnd; t += slice)
       ranges.push([t, Math.min(t + slice, sliceEnd)]);
   }
-
+//************************** below, lime 81, added 13 Oct - for B-Weight */
   const limit = pLimit(config.concurrency);
   const results = await Promise.allSettled(ranges.map(([s, e]) => limit(async () => {
     try {
       const res = await axios.get(config.url, { params: { symbol, interval: config.apiInterval, startTime: s, endTime: e, limit: config.limit }, timeout: TIMEOUT_MS });
+      weightMonitor.logRequest('bin-pfr', '/fapi/v1/premiumIndexKlines', 1);
       await sleep(RATE_DELAY);
       return res.data || [];
     } catch { return []; }

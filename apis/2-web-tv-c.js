@@ -1,12 +1,16 @@
 /* ==========================================
- * web-tv-c.js   13 Oct 2025
- * Continuous WebSocket Taker Volume Collector
+ * web-tv-c.js   14 Oct 2025
+ * Real-Time WebSocket Taker Volume Collector
+ *
+ * MAJOR CHANGE: Switched from 5-minute bucketing to 1-minute real-time processing
+ * - Aggregates trades into 1-minute windows
+ * - Queries current + previous 1-minute OHLCV for price delta bias calculation
+ * - Inserts single 1-minute tbv/tsv record immediately when minute completes
+ * - Uses same BIAS_STRENGTH formula as bin-tv-h.js for uniformity
+ * - No lag - inserts happen ~1-2 seconds after minute boundary
  *
  * Streams trade data from Binance, Bybit, and OKX
- * Aggregates taker buy/sell volume into 5-minute windows
- * Uses OHLCV (exchange-specific: bin-ohlcv/byb-ohlcv/okx-ohlcv) to distribute into biased 1m tbv/tsv
- * Inserts 5 x 1m records per 5m window (even split fallback if OHLCV incomplete/lagging)
- * 
+ * Calculates taker buy/sell volume with price direction bias
  * FIXED: OKX contract normalization - converts sz (contracts) to base tokens via ctVal
  * ========================================== */
 
@@ -18,13 +22,26 @@ const perpList = require('../perp-list');
 require('dotenv').config();
 
 const SCRIPT_NAME = 'web-tv-c.js';
-const AGGREGATION_WINDOW = 5 * 60 * 1000; // 5 minutes for tbv/tsv totals
-const FLUSH_INTERVAL = 60000; // Check/flush every 1 minute (for completed 5m windows)
 
-/* ==========================================
- * OKX CONTRACT VALUE CACHE
- * Maps instId to ctVal for volume normalization
- * ========================================== */
+// ============================================================================
+// USER CONFIGURATION
+// ============================================================================
+const STATUS_COLOR = '\x1b[92m'; // Standard green for status logs
+const RESET = '\x1b[0m'; // Reset console color
+
+// Bias strength for tbv/tsv distribution (0-1 range, 0.6 = 60% bias toward price direction)
+const BIAS_STRENGTH = 0.6;
+
+// Flush interval: Check for completed 1-minute windows (ms)
+const FLUSH_INTERVAL = 5000; // Check every 5 seconds
+
+// Status log interval
+const STATUS_LOG_INTERVAL = 60000; // 1 minute
+
+// ============================================================================
+// OKX CONTRACT VALUE CACHE
+// Maps instId to ctVal for volume normalization (contracts → base tokens)
+// ============================================================================
 const okxContractMap = {}; // { "BTC-USDT-SWAP": 0.01, "ETH-USDT-SWAP": 0.1, ... }
 
 async function loadOkxContracts() {
@@ -37,7 +54,7 @@ async function loadOkxContracts() {
       for (const inst of res.data.data) {
         okxContractMap[inst.instId] = parseFloat(inst.ctVal);
       }
-      console.log(`✅ Loaded ${Object.keys(okxContractMap).length} OKX contract specs`);
+      // Status log removed per user request
     }
   } catch (err) {
     console.error('❌ Failed to load OKX contracts:', err.message);
@@ -51,10 +68,10 @@ async function loadOkxContracts() {
   }
 }
 
-/* ==========================================
- * EXCHANGE CONFIGURATION
- * Defines WebSocket URLs, perpspec names, symbol mapping, and OHLCV perpspec for biasing
- * ========================================== */
+// ============================================================================
+// EXCHANGE CONFIGURATION
+// Defines WebSocket URLs, perpspec names, symbol mapping, and OHLCV perpspec for biasing
+// ============================================================================
 const EXCHANGE_CONFIG = {
   BINANCE: {
     PERPSPEC: 'bin-tv',
@@ -77,7 +94,11 @@ const EXCHANGE_CONFIG = {
   }
 };
 
-// Aggregation buckets: { perpspec: { symbol: { tbv_total, tsv_total, windowStart } } }
+// ============================================================================
+// 1-MINUTE AGGREGATION BUCKETS
+// Structure: { perpspec: { symbol: { tbv_total, tsv_total, windowStart } } }
+// Each bucket represents a single 1-minute window
+// ============================================================================
 const volumeBuckets = {
   'bin-tv': {},
   'byb-tv': {},
@@ -98,18 +119,42 @@ const lastStatusLog = {
   'okx-tv': Date.now()
 };
 
-const STATUS_LOG_INTERVAL = 60000; // 1 minute
+// ============================================================================
+// CONNECTION TRACKING
+// Tracks first successful message from each exchange for "connected" status log
+// ============================================================================
+const connectionStatus = {
+  'bin-tv': false,
+  'byb-tv': false,
+  'okx-tv': false
+};
 
-/* ==========================================
- * AGGREGATION HELPERS
- * Manage 5-minute volume aggregation windows
- * ========================================== */
+let allConnected = false;
+
+async function checkAndLogAllConnected() {
+  if (!allConnected && connectionStatus['bin-tv'] && 
+      connectionStatus['byb-tv'] && connectionStatus['okx-tv']) {
+    allConnected = true;
+    const message = 'bin-tv, byb-tv, okx-tv successful connections; fetching.';
+    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', message);
+    console.log(`${STATUS_COLOR}⚖️ ${message}${RESET}`);
+  }
+}
+
+// ============================================================================
+// 1-MINUTE AGGREGATION HELPERS
+// Manage 1-minute volume aggregation windows
+// ============================================================================
 
 /**
- * Get or create volume bucket for symbol (5min total tbv/tsv)
+ * Get or create 1-minute volume bucket for symbol
+ * @param {string} perpspec - Exchange perpspec (bin-tv, byb-tv, okx-tv)
+ * @param {string} baseSymbol - Base symbol (BTC, ETH, etc)
+ * @param {number} timestamp - Trade timestamp in ms
+ * @returns {object} Bucket object with tbv_total, tsv_total, windowStart
  */
 function getVolumeBucket(perpspec, baseSymbol, timestamp) {
-  const windowStart = Math.floor(timestamp / AGGREGATION_WINDOW) * AGGREGATION_WINDOW;
+  const windowStart = Math.floor(timestamp / 60000) * 60000; // Floor to 1-minute boundary
   
   if (!volumeBuckets[perpspec][baseSymbol]) {
     volumeBuckets[perpspec][baseSymbol] = {
@@ -121,12 +166,12 @@ function getVolumeBucket(perpspec, baseSymbol, timestamp) {
 
   const bucket = volumeBuckets[perpspec][baseSymbol];
 
-  // Check if we've moved to a new window
+  // Check if we've moved to a new 1-minute window
   if (bucket.windowStart !== windowStart) {
     // Flush old bucket before creating new one
     flushBucket(perpspec, baseSymbol);
     
-    // Create new bucket
+    // Create new bucket for current minute
     volumeBuckets[perpspec][baseSymbol] = {
       tbv_total: 0,
       tsv_total: 0,
@@ -139,28 +184,38 @@ function getVolumeBucket(perpspec, baseSymbol, timestamp) {
 }
 
 /**
- * Flush 5min bucket: Query OHLCV, distribute biased tbv/tsv into 5 x 1m records, insert batch
+ * Flush 1-minute bucket: Query current + previous OHLCV, calculate bias, insert single record
+ * NEW APPROACH: Uses 1-minute processing instead of 5-minute bucketing
+ * - Queries current minute and previous minute OHLCV for price delta
+ * - Applies same BIAS_STRENGTH formula as bin-tv-h.js
+ * - Inserts single 1-minute record immediately
+ * 
+ * @param {string} perpspec - Exchange perpspec
+ * @param {string} baseSymbol - Base symbol
  */
 async function flushBucket(perpspec, baseSymbol) {
   const bucket = volumeBuckets[perpspec][baseSymbol];
   if (!bucket || (bucket.tbv_total === 0 && bucket.tsv_total === 0)) return;
 
-  const timestamp = bucket.windowStart;  // 5m start
+  const currentMinuteTs = bucket.windowStart;  // Current 1-minute start
+  const previousMinuteTs = currentMinuteTs - 60000;  // Previous 1-minute start
   const tbv_total = bucket.tbv_total;
   const tsv_total = bucket.tsv_total;
-  const endTs = timestamp + AGGREGATION_WINDOW;
-  const ohlcvPerpspec = EXCHANGE_CONFIG[Object.keys(EXCHANGE_CONFIG).find(key => EXCHANGE_CONFIG[key].PERPSPEC === perpspec)].OHLCV_PERPSPEC;
+  const ohlcvPerpspec = EXCHANGE_CONFIG[Object.keys(EXCHANGE_CONFIG).find(key => 
+    EXCHANGE_CONFIG[key].PERPSPEC === perpspec)].OHLCV_PERPSPEC;
 
   try {
-    // Query 1m OHLCV for this 5m window
-    let ohlcvData = await dbManager.queryPerpData(ohlcvPerpspec, baseSymbol, timestamp, endTs);
+    // Query OHLCV for current and previous minute (need price delta for bias calculation)
+    const queryStart = previousMinuteTs;
+    const queryEnd = currentMinuteTs + 60000;
+    let ohlcvData = await dbManager.queryPerpData(ohlcvPerpspec, baseSymbol, queryStart, queryEnd);
 
-    // Filter/sort: 1m, in range
+    // Filter for 1m interval, sort by timestamp
     ohlcvData = ohlcvData
-      .filter(d => d.interval === '1m' && d.ts >= timestamp && d.ts < endTs)
+      .filter(d => d.interval === '1m')
       .sort((a, b) => a.ts - b.ts);
 
-    // Dedup by ts (handle potential dups from live/backfill)
+    // Dedup by timestamp (handle potential duplicates)
     const uniqueOhlcv = [];
     const seenTs = new Set();
     for (const row of ohlcvData) {
@@ -171,137 +226,49 @@ async function flushBucket(perpspec, baseSymbol) {
     }
     ohlcvData = uniqueOhlcv;
 
-    // If <5 rows (OHLCV lag/incomplete), fallback to even split across 5 slots
-    let processedRecords = [];
-    if (ohlcvData.length < 5) {
-      // Even split (live fallback - no warn, as OHLCV may lag)
-      for (let i = 0; i < 5; i++) {
-        const minuteTs = timestamp + (i * 60 * 1000);
-        processedRecords.push({
-          ts: apiUtils.toMillis(BigInt(minuteTs)),
-          symbol: baseSymbol,
-          source: perpspec,
-          perpspec: perpspec,
-          interval: '1m',
-          tbv: tbv_total / 5,
-          tsv: tsv_total / 5
-        });
-      }
+    // Find current and previous minute candles
+    const currentCandle = ohlcvData.find(d => d.ts === currentMinuteTs);
+    const previousCandle = ohlcvData.find(d => d.ts === previousMinuteTs);
+
+    let tbv, tsv;
+
+    // Calculate bias based on price direction (same logic as bin-tv-h.js)
+    if (currentCandle && previousCandle) {
+      const currC = parseFloat(currentCandle.c || 0);
+      const prevC = parseFloat(previousCandle.c || 0);
+      const price_delta = currC - prevC;
+
+      // Price direction signal: +1 (up), -1 (down), 0 (flat)
+      const s = price_delta > 0 ? 1 : (price_delta < 0 ? -1 : 0);
+
+      // Apply bias: price up = more tbv, price down = more tsv
+      // Formula matches bin-tv-h.js line 132-133
+      const tbv_weight = 0.5 + s * BIAS_STRENGTH * 0.5;  // Range: 0.2 to 0.8 (with 0.6 bias)
+      const tsv_weight = 0.5 - s * BIAS_STRENGTH * 0.5;  // Range: 0.8 to 0.2 (with 0.6 bias)
+
+      tbv = tbv_total * tbv_weight;
+      tsv = tsv_total * tsv_weight;
     } else {
-      // Verify consecutive (strict for historical match, but live may skip if not exact)
-      let expectedTs = timestamp;
-      let consecutive = true;
-      for (let row of ohlcvData) {
-        if (row.ts !== expectedTs) {
-          consecutive = false;
-          break;
-        }
-        expectedTs += 60 * 1000;
-      }
-
-      if (!consecutive || ohlcvData.length !== 5) {
-        // Even split fallback (live tolerance)
-        for (let i = 0; i < 5; i++) {
-          const minuteTs = timestamp + (i * 60 * 1000);
-          processedRecords.push({
-            ts: apiUtils.toMillis(BigInt(minuteTs)),
-            symbol: baseSymbol,
-            source: perpspec,
-            perpspec: perpspec,
-            interval: '1m',
-            tbv: tbv_total / 5,
-            tsv: tsv_total / 5
-          });
-        }
-      } else {
-        // Biased distribution (full OHLCV available)
-        const total_v = ohlcvData.reduce((sum, d) => sum + parseFloat(d.v || 0), 0);
-
-        if (total_v === 0) {
-          // Even if no volume
-          for (let i = 0; i < 5; i++) {
-            const minuteTs = timestamp + (i * 60 * 1000);
-            processedRecords.push({
-              ts: apiUtils.toMillis(BigInt(minuteTs)),
-              symbol: baseSymbol,
-              source: perpspec,
-              perpspec: perpspec,
-              interval: '1m',
-              tbv: tbv_total / 5,
-              tsv: tsv_total / 5
-            });
-          }
-        } else {
-          // Compute weights (same as bin-tv-h.js)
-          let prevC = null;
-          let tbv_weights = [];
-          let tsv_weights = [];
-          let tbv_sum_weight = 0;
-          let tsv_sum_weight = 0;
-
-          for (let i = 0; i < 5; i++) {
-            const currV = parseFloat(ohlcvData[i].v || 0);
-            const currC = parseFloat(ohlcvData[i].c || 0);
-            let price_delta = 0;
-            if (i > 0) {
-              price_delta = currC - prevC;
-            }
-            prevC = currC;
-
-            const vol_weight = currV / total_v;
-
-            //=====================change 13 OCt=======================
-            const s = price_delta > 0 ? 1 : (price_delta < 0 ? -1 : 0);
-            const BIAS_STRENGTH = 0.6;  // 60% bias (adjust 0-1)
-
-            const tbv_w = vol_weight * (0.5 + s * BIAS_STRENGTH * 0.5);  // Range: 20%-80%
-            const tsv_w = vol_weight * (0.5 - s * BIAS_STRENGTH * 0.5);  // Range: 80%-20%
-            //========================================================
-
-            tbv_weights.push(tbv_w);
-            tsv_weights.push(tsv_w);
-            tbv_sum_weight += tbv_w;
-            tsv_sum_weight += tsv_w;
-          }
-
-          // Fallback even if sums too low
-          const even_weight = 1 / 5;
-          if (tbv_sum_weight < 1e-6) {
-            for (let i = 0; i < 5; i++) tbv_weights[i] = even_weight;
-            tbv_sum_weight = 1;
-          }
-          if (tsv_sum_weight < 1e-6) {
-            for (let i = 0; i < 5; i++) tsv_weights[i] = even_weight;
-            tsv_sum_weight = 1;
-          }
-
-          // Allocate to 1m records
-          for (let i = 0; i < 5; i++) {
-            const minuteTs = timestamp + (i * 60 * 1000);
-            const tbv = (tbv_weights[i] / tbv_sum_weight) * tbv_total;
-            const tsv = (tsv_weights[i] / tsv_sum_weight) * tsv_total;
-
-            processedRecords.push({
-              ts: apiUtils.toMillis(BigInt(minuteTs)),
-              symbol: baseSymbol,
-              source: perpspec,
-              perpspec: perpspec,
-              interval: '1m',
-              tbv,
-              tsv
-            });
-          }
-        }
-      }
+      // Fallback: No bias if OHLCV unavailable (even split)
+      tbv = tbv_total * 0.5;
+      tsv = tsv_total * 0.5;
     }
 
-    if (processedRecords.length > 0) {
-      // Batch insert 5 x 1m records
-      await dbManager.insertData(perpspec, processedRecords);
-      sessionInsertCounts[perpspec] += processedRecords.length;  // Cumulative session total
-    }
+    // Insert single 1-minute record
+    const record = {
+      ts: apiUtils.toMillis(BigInt(currentMinuteTs)),
+      symbol: baseSymbol,
+      source: perpspec,
+      perpspec: perpspec,
+      interval: '1m',
+      tbv,
+      tsv
+    };
 
-    // Clear bucket after flush
+    await dbManager.insertData(perpspec, [record]);
+    sessionInsertCounts[perpspec] += 1;
+
+    // Clear bucket after successful flush
     delete volumeBuckets[perpspec][baseSymbol];
 
   } catch (error) {
@@ -318,18 +285,23 @@ async function flushBucket(perpspec, baseSymbol) {
 }
 
 /**
- * Flush all buckets for a perpspec (for completed windows only)
+ * Flush all completed 1-minute buckets for a perpspec
+ * Only flushes buckets where the minute has fully elapsed
+ * 
+ * @param {string} perpspec - Exchange perpspec
  */
 async function flushAllBuckets(perpspec) {
   const symbols = Object.keys(volumeBuckets[perpspec]);
+  const now = Date.now();
+  const currentWindow = Math.floor(now / 60000) * 60000;  // Current 1-minute boundary
+
   for (const symbol of symbols) {
     try {
       const bucket = volumeBuckets[perpspec][symbol];
-      if (!bucket) continue;  // Defensive check
+      if (!bucket) continue;
 
-      const now = Date.now();
-      const currentWindow = Math.floor(now / AGGREGATION_WINDOW) * AGGREGATION_WINDOW;
-      if (bucket.windowStart < currentWindow) {  // Only completed 5m
+      // Only flush completed 1-minute windows (not current active minute)
+      if (bucket.windowStart < currentWindow) {
         await flushBucket(perpspec, symbol);
       }
     } catch (err) {
@@ -339,14 +311,18 @@ async function flushAllBuckets(perpspec) {
   }
 }
 
-/* ==========================================
- * TRADE PROCESSING
- * Process incoming trades and aggregate into 5min totals
- * ========================================== */
+// ============================================================================
+// TRADE PROCESSING
+// Process incoming trades and aggregate into 1-minute totals
+// FIXED: OKX volume normalized to base tokens via ctVal
+// ============================================================================
 
 /**
- * Process trade and add to 5min aggregation bucket
- * FIXED: OKX volume now normalized to base tokens via ctVal
+ * Process individual trade and add to 1-minute aggregation bucket
+ * 
+ * @param {string} exchange - Exchange name (BINANCE, BYBIT, OKX)
+ * @param {string} baseSymbol - Base symbol (BTC, ETH, etc)
+ * @param {object} rawData - Raw trade data from WebSocket
  */
 async function processTrade(exchange, baseSymbol, rawData) {
   const config = EXCHANGE_CONFIG[exchange];
@@ -354,17 +330,23 @@ async function processTrade(exchange, baseSymbol, rawData) {
 
   const perpspec = config.PERPSPEC;
 
+  // Mark connection as successful on first trade
+  if (!connectionStatus[perpspec]) {
+    connectionStatus[perpspec] = true;
+    await checkAndLogAllConnected();
+  }
+
   try {
     let timestamp, isBuy, volume;
 
     if (exchange === 'BINANCE') {
       timestamp = parseInt(rawData.T);
       isBuy = !rawData.m; // m=false = taker buy
-      volume = parseFloat(rawData.q);
+      volume = parseFloat(rawData.q);  // Quote volume (USDT)
     } else if (exchange === 'BYBIT') {
       timestamp = parseInt(rawData.T);
       isBuy = rawData.S === 'Buy';
-      volume = parseFloat(rawData.v);
+      volume = parseFloat(rawData.v);  // Base volume (tokens)
     } else if (exchange === 'OKX') {
       timestamp = parseInt(rawData.ts);
       isBuy = rawData.side === 'buy';
@@ -377,7 +359,7 @@ async function processTrade(exchange, baseSymbol, rawData) {
 
     if (isNaN(timestamp) || isNaN(volume) || volume <= 0) return;
 
-    // Get or create 5min bucket
+    // Get or create 1-minute bucket
     const bucket = getVolumeBucket(perpspec, baseSymbol, timestamp);
 
     // Add to totals
@@ -399,11 +381,15 @@ async function processTrade(exchange, baseSymbol, rawData) {
   }
 }
 
-/* ==========================================
- * WEBSOCKET FUNCTIONS
- * ========================================== */
+// ============================================================================
+// WEBSOCKET FUNCTIONS
+// Establish WebSocket connections and route trades to processTrade()
+// ============================================================================
 
-// Binance: One WS per symbol
+/**
+ * Binance WebSocket: One connection per symbol
+ * Subscribes to aggTrade stream for each symbol
+ */
 async function binanceWebSocket() {
   for (const baseSymbol of perpList) {
     const config = EXCHANGE_CONFIG.BINANCE;
@@ -412,6 +398,7 @@ async function binanceWebSocket() {
     const ws = new WebSocket(wsUrl);
 
     ws.on('open', () => {
+      // Silent connection (no log per user request)
     });
 
     ws.on('message', async (data) => {
@@ -450,18 +437,22 @@ async function binanceWebSocket() {
   }
 }
 
-// Bybit: Single WS, multi-subscribe
+/**
+ * Bybit WebSocket: Single connection, multi-symbol subscription
+ * Subscribes to publicTrade channel for all symbols
+ */
 async function bybitWebSocket() {
   const config = EXCHANGE_CONFIG.BYBIT;
   const ws = new WebSocket(config.WS_URL);
 
   ws.on('open', () => {
     const args = perpList.map(sym => `publicTrade.${config.mapSymbol(sym)}`);
+    // Subscribe in chunks of 200 (Bybit limit)
     for (let i = 0; i < args.length; i += 200) {
       const chunk = args.slice(i, i + 200);
       ws.send(JSON.stringify({ op: 'subscribe', args: chunk }));
     }
-    console.log(`✅ Buy/Sell Taker Vol subscribed to ${perpList.length} symbols`);
+    // Silent subscription (no log per user request)
   });
 
   ws.on('message', async (data) => {
@@ -510,7 +501,10 @@ async function bybitWebSocket() {
   });
 }
 
-// OKX: Single WS, multi-subscribe
+/**
+ * OKX WebSocket: Single connection, multi-symbol subscription
+ * Subscribes to trades channel for all symbols
+ */
 async function okxWebSocket() {
   const config = EXCHANGE_CONFIG.OKX;
   const ws = new WebSocket(config.WS_URL);
@@ -576,57 +570,54 @@ async function okxWebSocket() {
   });
 }
 
-/* ==========================================
- * PERIODIC BUCKET FLUSHING
- * Flush completed 5-minute windows every 1min
- * ========================================== */
+// ============================================================================
+// PERIODIC BUCKET FLUSHING
+// Check every 5 seconds for completed 1-minute windows and flush them
+// ============================================================================
 async function startPeriodicFlush() {
   setInterval(async () => {
-    const now = Date.now();
-    const currentWindow = Math.floor(now / AGGREGATION_WINDOW) * AGGREGATION_WINDOW;
-
-    // Flush completed windows for all exchanges
+    // Flush completed 1-minute windows for all exchanges
     for (const perpspec of Object.keys(volumeBuckets)) {
       await flushAllBuckets(perpspec);
     }
 
-    // Periodic status: Log session total inserted (cumulative since start)
+    // Periodic status: Log running status every minute
     const nowLog = Date.now();
     for (const perpspec of Object.keys(EXCHANGE_CONFIG)) {
-        const key = EXCHANGE_CONFIG[perpspec].PERPSPEC;
-        if (!lastStatusLog[key] || nowLog - lastStatusLog[key] >= STATUS_LOG_INTERVAL) {
-    const message = `${key} 1m insert`;
-    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message);
-    console.log(message);
-    lastStatusLog[key] = nowLog;
+      const key = EXCHANGE_CONFIG[perpspec].PERPSPEC;
+      if (!lastStatusLog[key] || nowLog - lastStatusLog[key] >= STATUS_LOG_INTERVAL) {
+        const message = `${key} 1m pull & calc`;
+        await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message);
+        console.log(`${STATUS_COLOR}${message}${RESET}`);
+        lastStatusLog[key] = nowLog;
       }
     }
   }, FLUSH_INTERVAL);
 }
 
-/* ==========================================
- * MAIN EXECUTION
- * ========================================== */
+// ============================================================================
+// MAIN EXECUTION
+// ============================================================================
 async function execute() {
-  console.log(`🚀 Starting ${SCRIPT_NAME} - WebSocket taker volume streaming (5m biased to 1m)`);
+  console.log(`${STATUS_COLOR}⚖️ Starting ${SCRIPT_NAME} - WebSocket taker volume streaming (1m real-time)${RESET}`);
 
   // Load OKX contract values for normalization
   await loadOkxContracts();
 
   // Status: Started
-  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);
+  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} started`);
 
   // Start all WebSocket connections
   binanceWebSocket();
   bybitWebSocket();
   okxWebSocket();
 
-  // Start periodic flushing and status
+  // Start periodic flushing and status logging
   startPeriodicFlush();
 
   // Graceful shutdown
   process.on('SIGINT', async () => {
-    console.log(`\n${SCRIPT_NAME} received SIGINT, stopping...`);
+    console.log(`\n⚖️ ${SCRIPT_NAME} received SIGINT, stopping...`);
     
     // Flush all remaining buckets
     for (const perpspec of Object.keys(volumeBuckets)) {
@@ -639,9 +630,9 @@ async function execute() {
   });
 }
 
-/* ==========================================
- * MODULE ENTRY POINT
- * ========================================== */
+// ============================================================================
+// MODULE ENTRY POINT
+// ============================================================================
 if (require.main === module) {
   execute()
     .catch(err => {

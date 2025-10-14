@@ -27,10 +27,10 @@ const PROXY_PAGE_DELAY_MS = 100;      // 100 d. Slower paging for proxy stabilit
 const PROXY_TIMEOUT_MS = 9000;       // 9000 d. Longer timeout for proxy
 
 // SHARED SETTINGS
-const RETRY_429_MAX = 1;              // 1 d. Max retries on 429 errors
-const RETRY_429_BASE_MS = 500;        // 500 d. Base delay for 429 retry (exponential backoff)
-const HEARTBEAT_STATUS_INTERVAL = 15000;   // Status heartbeat every 15 sec
-const HEARTBEAT_429_INTERVAL = 10000;      // 429 error summary every 10 sec
+const RETRY_429_MAX = 2;              // 1 d. Max retries on 429 errors
+const RETRY_429_BASE_MS = 600;        // 500 d. Base delay for 429 retry (exponential backoff)
+const HEARTBEAT_STATUS_INTERVAL = 25000;   // Status heartbeat every 15 sec
+const HEARTBEAT_429_INTERVAL = 15000;      // 429 error summary every 10 sec
 const DIRECT_PROXY_SPLIT = 50;        // 50 d. Percentage of symbols using direct (rest use proxy)
 const DB_INSERT_MILESTONE = 25000;    // 25k d. Log inserts every 25k records
 
@@ -230,7 +230,7 @@ async function fetchOKXPremium(baseSymbol, useProxy = false) {
           // Log at 25k milestones only
           if (Math.floor(stats.recordsInserted / DB_INSERT_MILESTONE) > Math.floor(lastInsertLog / DB_INSERT_MILESTONE)) {
             const msg = `${OKX_CONFIG.perpspec} inserted ${stats.recordsInserted} records to db`;
-            console.log(`[INSERT] ${msg}`);
+            console.log(`${msg}`);
             await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg);
             lastInsertLog = stats.recordsInserted;
           }

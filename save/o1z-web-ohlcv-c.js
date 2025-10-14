@@ -126,7 +126,7 @@ async function insertMT(perpspec, mtRecord) {
     if (!mtRecord) return; // Skip if null
 
     await dbManager.insertData(perpspec, [mtRecord]);
-    console.log(`✅ MT Market Trend token creation 1m poll`);
+    console.log(`✅ MT Market Trend token 1m`);
   } catch (error) {
     await apiUtils.logScriptError(
       dbManager,
@@ -232,7 +232,7 @@ async function processAndInsert(exchange, baseSymbol, rawData) {
     const expectedCount = (exchange === 'BYBIT') ? bybitActiveSymbols.size : perpList.length;
     
     if (completedSymbols[perpspec].size === expectedCount) {
-      const message = `${perpspec} 1min pull for ${expectedCount} symbols`;
+      const message = `${perpspec} 1min ohlcv for ${expectedCount} symbols`;
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message);
       console.log(message);
 

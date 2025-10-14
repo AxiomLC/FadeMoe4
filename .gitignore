@@ -6,3 +6,5 @@ dynamic-symbols.json
 test/
 backup/
 .vscode/
+test/
+.binance-weight.json

@@ -300,11 +300,12 @@ async function execute() {
 
   // Log completion status for each perpspec after the initial poll cycle
   // Status: "running", Message: "{perpspec} 1min pull complete"
-  for (const perpspec of perpspecs) {
+  /*for (const perpspec of perpspecs) {
     const message = `${perpspec} 1min pfr pull`;
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message);
     console.log(message); // Console output matches DB message
   }
+    */
 
   // Polling loop
   const pollIntervalId = setInterval(async () => {
@@ -312,10 +313,11 @@ async function execute() {
       await pollAllSymbols();
       // Log completion status for each perpspec after each polling cycle
       for (const perpspec of perpspecs) {
-        const message = `${perpspec} 1min pfr pull complete`;
+        const message = `${perpspec} 1min pfr pull`;
         await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message);
         console.log(message); // Console output matches DB message
     }
+    
     } catch (error) {
       // Log system errors during the polling cycle
       console.error('Error in polling cycle:', error.message);

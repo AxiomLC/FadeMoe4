@@ -222,7 +222,7 @@ async function execute() {
   await pollAllSymbols();
 
   // Status: running after initial
-  const initialMsg = `${SCRIPT_NAME} initial poll complete`;
+  const initialMsg = `${SCRIPT_NAME} initial Calc complete`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', initialMsg);
   console.log(initialMsg);
 
@@ -231,7 +231,7 @@ async function execute() {
     try {
       await pollAllSymbols();
       // Status: running after each cycle
-      const cycleMsg = `${SCRIPT_NAME} 1min rsi pull complete`;
+      const cycleMsg = `${SCRIPT_NAME} 1m rsi Calc done`;
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', cycleMsg);
       console.log(cycleMsg);
     } catch (error) {

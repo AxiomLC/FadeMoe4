@@ -11,6 +11,7 @@ const dbManager = require('../db/dbsetup');
 const apiUtils = require('../api-utils');
 const perpList = require('../perp-list');
 const pLimit = require('p-limit');
+const weightMonitor = require('../b-weight');
 
 const SCRIPT_NAME = 'all-oi-h.js';
 const DAYS = 10;
@@ -32,7 +33,7 @@ const EXCHANGES = {
     url: 'https://fapi.binance.com/futures/data/openInterestHist',
     limit: 500,
     rateDelay: 100,
-    concurrency: 5,
+    concurrency: 3,
     timeout: 15000,
     apiInterval: '5m',
     dbInterval: '1m',
@@ -57,8 +58,8 @@ const EXCHANGES = {
     perpspec: 'okx-oi',
     url: 'https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-history',
     limit: 100,
-    rateDelay: 250,
-    concurrency: 2,
+    rateDelay: 200,
+    concurrency: 3,
     timeout: 15000,
     apiInterval: '5m',
     dbInterval: '1m',
@@ -78,7 +79,9 @@ async function fetchBinanceOI(symbol, config, startTs, endTs) {
     const nextEnd = Math.min(current + config.limit * 5 * 60 * 1000, endTs);
     const params = { symbol, period: config.apiInterval, limit: config.limit, startTime: current, endTime: nextEnd };
     try {
+      //*********************line 84 added 13 Oct for B-Weight */
       const response = await axios.get(config.url, { params, timeout: config.timeout });
+      weightMonitor.logRequest('bin-oi', '/futures/data/openInterestHist', 1); //************added 13 Oct for B-Weight */
       const data = response.data;
       if (!data || data.length === 0) break;
       allData.push(...data);

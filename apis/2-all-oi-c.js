@@ -1,7 +1,7 @@
 /* ==========================================
  * all-oi-c.js   (Unified USD Normalization)
  * Continuous Open Interest Polling Script
- * Updated: 13 Oct 2025
+ * Updated: 14 Oct 2025
  * ------------------------------------------
  * ✅ OI normalized to USD across exchanges
  * ✅ Bybit 5x1 conversion confirmed accurate
@@ -14,7 +14,10 @@ const perpList = require('../perp-list');
 require('dotenv').config();
 
 const SCRIPT_NAME = 'all-oi-c.js';
+const STATUS_COLOR = '\x1b[92m'; // Standard green for status logs
+const RESET = '\x1b[0m'; // Reset console color
 const POLL_INTERVAL = 60 * 1000; // 1 minute
+const RETRY_INTERVAL = 10 * 1000; // 10s retry if no new
 
 /* ==========================================
  * CONTRACT MULTIPLIERS (Binance)
@@ -49,6 +52,11 @@ const EXCHANGE_CONFIG = {
     mapSymbol: sym => `${sym}-USDT-SWAP`
   }
 };
+
+// Track connected perpspecs for Log #2
+const connectedPerpspecs = new Set();
+// Track completed 1m pulls for Log #3
+const completedPulls = new Map(Object.keys(EXCHANGE_CONFIG).map(key => [EXCHANGE_CONFIG[key].PERPSPEC, new Set()]));
 
 /* ==========================================
  * BINANCE PRICE HELPER (Fallback)
@@ -113,22 +121,22 @@ function processBybitData(rawData, baseSymbol, config) {
     if (isNaN(oiUsd)) return null;
 
     // floor timestamp to nearest minute, filter future inserts
-const now = Date.now();
-const baseTs = Math.floor(timestamp / 60000) * 60000;
+    const now = Date.now();
+    const baseTs = Math.floor(timestamp / 60000) * 60000;
 
-for (let i = 0; i < 5; i++) {
-  const ts = baseTs + i * 60 * 1000;
-  if (ts <= now) {
-    expandedRecords.push({
-      ts: apiUtils.toMillis(BigInt(ts)),
-      symbol: baseSymbol,
-      source: perpspec,
-      perpspec,
-      interval: config.DB_INTERVAL,
-      oi: oiUsd
-    });
-  }
-}
+    for (let i = 0; i < 5; i++) {
+      const ts = baseTs + i * 60 * 1000;
+      if (ts <= now) {
+        expandedRecords.push({
+          ts: apiUtils.toMillis(BigInt(ts)),
+          symbol: baseSymbol,
+          source: perpspec,
+          perpspec,
+          interval: config.DB_INTERVAL,
+          oi: oiUsd
+        });
+      }
+    }
 
     return expandedRecords;
   } catch {
@@ -205,9 +213,29 @@ async function pollSymbolAndExchange(baseSymbol, exchangeConfig) {
         break;
     }
 
+    // Log #2: First successful response for perpspec
+    if (!connectedPerpspecs.has(perpspec) && processedData) {
+      connectedPerpspecs.add(perpspec);
+      if (connectedPerpspecs.size === Object.keys(EXCHANGE_CONFIG).length) {
+        const message = `♻️ ${Object.values(EXCHANGE_CONFIG).map(cfg => cfg.PERPSPEC).join(', ')} connected; fetching.`;
+        await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', message);
+        console.log(`${STATUS_COLOR}${message}${RESET}`);
+      }
+    }
+
     if (!processedData) return;
     const records = Array.isArray(processedData) ? processedData : [processedData];
     await dbManager.insertData(perpspec, records);
+
+    // Log #3: Perpspec 1m pull completion
+    completedPulls.get(perpspec).add(baseSymbol);
+    const expectedCount = perpList.length;
+    if (completedPulls.get(perpspec).size === expectedCount) {
+      const message = `${perpspec} 1m pull.`;
+      await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message, { perpspec });
+      console.log(`${STATUS_COLOR}${message}${RESET}`);
+      completedPulls.get(perpspec).clear(); // Reset for next 1m cycle
+    }
   } catch (err) {
     console.error(`[${perpspec}] Error polling ${baseSymbol}:`, err.message);
     await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'API', 'POLL_ERROR', err.message, {
@@ -222,61 +250,54 @@ async function pollSymbolAndExchange(baseSymbol, exchangeConfig) {
  * POLL ALL SYMBOLS
  * ========================================== */
 async function pollAllSymbols() {
-  console.log(`\n[${new Date().toISOString().slice(11, 19)}] Polling ${perpList.length} symbols...`);
   const exchanges = [EXCHANGE_CONFIG.BINANCE, EXCHANGE_CONFIG.BYBIT, EXCHANGE_CONFIG.OKX];
   const pLimit = (await import('p-limit')).default;
   const limit = pLimit(10);
-  const successCounts = { 'bin-oi': 0, 'byb-oi': 0, 'okx-oi': 0 };
 
   const tasks = [];
   for (const sym of perpList) {
     for (const cfg of exchanges) {
       tasks.push(limit(async () => {
-        try {
-          await pollSymbolAndExchange(sym, cfg);
-          successCounts[cfg.PERPSPEC]++;
-        } catch {}
+        await pollSymbolAndExchange(sym, cfg);
       }));
     }
   }
   await Promise.all(tasks);
-
-  for (const cfg of exchanges) {
-    console.log(`[${cfg.PERPSPEC}] Polling ${successCounts[cfg.PERPSPEC]} symbols.`);
-  }
 }
 
 /* ==========================================
  * MAIN EXECUTION
  * ========================================== */
 async function execute() {
-  console.log(`⏰ Starting ${SCRIPT_NAME} - Continuous OI polling (USD normalized)`);
-  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);
+  // Log #1: Script start
+  const totalSymbols = perpList.length;
+  const startMessage = `♻️ Starting ${SCRIPT_NAME} real-time 1m pull; ${totalSymbols} symbols.`;
+  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', startMessage);
+  console.log(`${STATUS_COLOR}${startMessage}${RESET}`);
+
   await pollAllSymbols();
-  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${SCRIPT_NAME} initial poll complete`);
-  console.log(`${SCRIPT_NAME} initial poll complete`);
 
   const pollIntervalId = setInterval(async () => {
     try {
       await pollAllSymbols();
-      await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${SCRIPT_NAME} 1min oi pull`);
     } catch (err) {
       console.error('Error in polling cycle:', err.message);
       await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'SYSTEM', 'POLL_CYCLE_ERROR', err.message);
     }
   }, POLL_INTERVAL);
 
+  // Log #4: Graceful shutdown
   process.on('SIGINT', async () => {
     clearInterval(pollIntervalId);
-    console.log(`\n${SCRIPT_NAME} received SIGINT, stopping...`);
-    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', `${SCRIPT_NAME} stopped smoothly`);
+    const stopMessage = `♻️ ${SCRIPT_NAME} smoothly stopped.`;
+    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', stopMessage);
+    console.log(`${STATUS_COLOR}${stopMessage}${RESET}`);
     process.exit(0);
   });
 }
 
 if (require.main === module) {
   execute()
-    .then(() => console.log('✅ OI continuous polling (USD normalized) started'))
     .catch(err => {
       console.error('💥 OI continuous polling failed:', err);
       try {

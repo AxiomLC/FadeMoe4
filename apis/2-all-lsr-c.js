@@ -1,5 +1,5 @@
 /* ==========================================
- * all-lsr-c.js   11 Oct 2025
+ * all-lsr-c.js   14 Oct 2025
  * Continuous Long/Short Ratio Polling Script
  *
  * Fetches LSR data from Binance, Bybit, and OKX
@@ -14,6 +14,8 @@ const perpList = require('../perp-list');
 require('dotenv').config();
 
 const SCRIPT_NAME = 'all-lsr-c.js';
+const STATUS_COLOR = '\x1b[92m'; // Light green for status logs
+const RESET = '\x1b[0m'; // Reset console color
 const POLL_INTERVAL = 60 * 1000; // 1 minute heartbeat
 const RETRY_INTERVAL = 10 * 1000; // 10s retry if no new
 const WAIT_BUFFER = 5 * 1000; // +5s after 5m
@@ -51,6 +53,10 @@ const EXCHANGE_CONFIG = {
 
 // Track per symbol: lastTs (ms), cache {lsr, offsets: [60k,120k,180k,240k]}, fiveMTime (ms delay)
 const symbolData = new Map(); // key: perpspec:symbol, value: {lastTs, cache, fiveMTime}
+// Track connected perpspecs for Log #2
+const connectedPerpspecs = new Set();
+// Track completed 1m pulls for Log #3
+const completedPulls = new Map(PERPSPECS.map(p => [p, new Set()]));
 
 /* ==========================================
  * SHARED POLLING FUNCTION
@@ -76,6 +82,16 @@ async function pollLSR(baseSymbol, config) {
       case 'okx-lsr':
         rawData = await fetchOkxLSR(exchangeSymbol, config);
         break;
+    }
+
+    // Log #2: First successful response for perpspec
+    if (!connectedPerpspecs.has(perpspec)) {
+      connectedPerpspecs.add(perpspec);
+      if (connectedPerpspecs.size === PERPSPECS.length) {
+        const message = `🍾 ${PERPSPECS.join(', ')} connected; fetching.`;
+        await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', message);
+        console.log(`${STATUS_COLOR}${message}${RESET}`);
+      }
     }
 
     // Process
@@ -128,6 +144,16 @@ async function pollLSR(baseSymbol, config) {
       lsr
     }]);
 
+    // Log #3: Perpspec 1m pull completion
+    completedPulls.get(perpspec).add(baseSymbol);
+    const expectedCount = perpList.length;
+    if (completedPulls.get(perpspec).size === expectedCount) {
+      const message = `${perpspec} 1m pull.`;
+      await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message, { perpspec });
+      console.log(`${STATUS_COLOR}${message}${RESET}`);
+      completedPulls.get(perpspec).clear(); // Reset for next 1m cycle
+    }
+
     // Schedule next poll
     setTimeout(() => pollLSR(baseSymbol, config), data.fiveMTime + WAIT_BUFFER);
 
@@ -170,12 +196,11 @@ async function fetchOkxLSR(instId, config) {
 
 /* ==========================================
  * POLL ALL SYMBOLS
- * Heartbeat for running log and cache release
+ * Heartbeat for cache release
  * ========================================== */
 
 async function pollAllSymbols() {
   errorCount = 0; // Reset counter
-  const successCounts = PERPSPECS.reduce((acc, p) => ({...acc, [p]: 0}), {});
 
   // Release cached 1m records
   for (const [key, data] of symbolData) {
@@ -197,7 +222,16 @@ async function pollAllSymbols() {
         }]);
         c.offsets.shift();
         if (!c.offsets.length) delete data.cache;
-        successCounts[perpspec]++;
+
+        // Log #3: Perpspec 1m pull completion (for cached records)
+        completedPulls.get(perpspec).add(baseSymbol);
+        const expectedCount = perpList.length;
+        if (completedPulls.get(perpspec).size === expectedCount) {
+          const message = `${perpspec} 1m pull.`;
+          await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message, { perpspec });
+          console.log(`${STATUS_COLOR}${message}${RESET}`);
+          completedPulls.get(perpspec).clear(); // Reset for next 1m cycle
+        }
       } catch (error) {
         errorCount++;
         console.error(`[${perpspec}] Error polling ${baseSymbol}:`, error.message);
@@ -212,16 +246,9 @@ async function pollAllSymbols() {
 
   if (errorCount > ERROR_THRESHOLD) {
     console.error('Script halted: Error threshold exceeded');
-    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', 'Script halted: Error threshold exceeded');
+    await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'SYSTEM', 'ERROR_THRESHOLD_EXCEEDED', 'Script halted: Error threshold exceeded');
     process.exit(1);
   }
-
-  // Log running heartbeat
-  console.log(`\n[${new Date().toISOString().slice(11, 19)}] Polling ${perpList.length} symbols...`);
-  for (const perpspec of PERPSPECS) {
-    console.log(`[${perpspec}] Polling ${successCounts[perpspec]} symbols.`);
-  }
-  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${PERPSPECS.join(', ')} polling LSR ${perpList.length} symbols, 5x1min`);
 }
 
 /* ==========================================
@@ -230,34 +257,33 @@ async function pollAllSymbols() {
  * ========================================== */
 
 async function execute() {
-  console.log(`⏰ Starting ${SCRIPT_NAME} - Continuous Long/Short Ratio polling`);
-  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);
+  // Log #1: Script start
+  const totalSymbols = perpList.length;
+  const startMessage = `🍾 Starting ${SCRIPT_NAME} real-time 1m pull; ${totalSymbols} symbols.`;
+  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', startMessage);
+  console.log(`${STATUS_COLOR}${startMessage}${RESET}`);
 
   // Initial poll all symbols
   const pLimit = (await import('p-limit')).default;
   const limit = pLimit(10);
   await Promise.all(perpList.flatMap(symbol => Object.values(EXCHANGE_CONFIG).map(config => limit(() => pollLSR(symbol, config)))));
 
-  // Log running status immediately
-  console.log(`${SCRIPT_NAME} initial poll complete`);
-  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${SCRIPT_NAME} initial poll complete`);
-
   // Heartbeat interval
   const heartbeatId = setInterval(async () => {
     try {
       await pollAllSymbols();
-      await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', `${SCRIPT_NAME} 1min lsr pull`);
     } catch (error) {
       console.error('Error in polling cycle:', error.message);
       await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'SYSTEM', 'POLL_CYCLE_ERROR', error.message);
     }
   }, POLL_INTERVAL);
 
-  // Graceful shutdown
+  // Log #4: Graceful shutdown
   process.on('SIGINT', async () => {
     clearInterval(heartbeatId);
-    console.log(`\n${SCRIPT_NAME} received SIGINT, stopping...`);
-    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', `${SCRIPT_NAME} stopped smoothly`);
+    const stopMessage = `🍾 ${SCRIPT_NAME} smoothly stopped.`;
+    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', stopMessage);
+    console.log(`${STATUS_COLOR}${stopMessage}${RESET}`);
     process.exit(0);
   });
 }

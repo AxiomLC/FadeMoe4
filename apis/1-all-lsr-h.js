@@ -1,4 +1,4 @@
-// SCRIPT: all-lsr-h.js  6 Oct 2025
+// SCRIPT: all-lsr-h.js  14 Oct 2025
 // Unified Long/Short Ratio Backfill Script for Binance, Bybit, and OKX
 // Optimized for maximum speed with improved status logging
 
@@ -13,6 +13,11 @@ const DAYS = 10;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.now();
 const START = NOW - DAYS * MS_PER_DAY;
+const weightMonitor = require('../b-weight');
+
+// User-configurable console color for status logs (light blue)
+const STATUS_LOG_COLOR = '\x1b[36m';
+const STATUS_LOG_RESET = '\x1b[0m';
 
 // ============================================================================
 // SHARED UTILITIES
@@ -42,7 +47,7 @@ const EXCHANGES = {
     source: 'bin-lsr',
     url: 'https://fapi.binance.com/futures/data/globalLongShortAccountRatio',
     limit: 500,
-    rateDelay: 25,  // 40 req/sec = 25ms delay
+    rateDelay: 100,  // 40 req/sec = 25ms delay
     concurrency: 10,
     timeout: 8000,
     apiInterval: '5m',
@@ -57,8 +62,8 @@ const EXCHANGES = {
     source: 'byb-lsr',
     url: 'https://api.bybit.com/v5/market/account-ratio',
     limit: 500,
-    rateDelay: 8,  // 120 req/sec = ~8ms delay
-    concurrency: 10,
+    rateDelay: 100,  // 120 req/sec = ~8ms delay
+    concurrency: 8,
     timeout: 8000,
     apiInterval: '5min',
     dbInterval: '1m',
@@ -73,7 +78,7 @@ const EXCHANGES = {
     url: 'https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract',
     limit: 100,
     rateDelay: 300,  // 2.5 req/sec = 400ms delay
-    concurrency: 8,
+    concurrency: 6,
     timeout: 8000,
     apiInterval: '5m',
     dbInterval: '1m',
@@ -109,9 +114,10 @@ async function fetchBinanceLSR(symbol, config, startTs, endTs) {
       startTime: currentStart,
       endTime: nextEnd  // ADD THIS LINE
     };
-
+//******************************** below line, 116 added Oct 13 for b-Weight   */
     try {
       const response = await axios.get(config.url, { params, timeout: config.timeout });
+      weightMonitor.logRequest('bin-lsr', '/futures/data/globalLongShortAccountRatio', 1);
       const data = response.data;
 
       if (!data || data.length === 0) break;
@@ -352,97 +358,123 @@ function processOKXData(rawData, baseSymbol, config) {
 async function backfill() {
   const startTime = Date.now();
   
-  console.log(`\n🚀 Starting ${SCRIPT_NAME} backfill for Long/Short Ratios...`);
-
-  const perpspecs = Object.values(EXCHANGES).map(ex => ex.perpspec).join(', ');
-  
-  // STATUS #1: Starting
+  // #1 STATUS: started
+  const totalSymbols = perpList.length;
+  const perpspecs = Object.values(EXCHANGES).map(ex => ex.perpspec);
+  const perpspecsStr = perpspecs.join(', ');
   await apiUtils.logScriptStatus(
     dbManager,
     SCRIPT_NAME,
     'started',
-    `Starting ${SCRIPT_NAME} backfill for Long/Short Ratios for ${perpspecs}.`
+    `Starting ${SCRIPT_NAME} backfill for Long/Short Ratios; ${totalSymbols} symbols.`
   );
+  console.log(`${STATUS_LOG_COLOR}🥭 Starting ${SCRIPT_NAME} backfill for Long/Short Ratios; ${totalSymbols} symbols.${STATUS_LOG_RESET}`);
 
-  await apiUtils.logScriptStatus(
-    dbManager,
-    SCRIPT_NAME,
-    'running',
-    `${SCRIPT_NAME} backfill in progress...`
-  );
-
-  // Track connection status per exchange
-  const connectedLogged = {};
-  for (const exKey of Object.keys(EXCHANGES)) {
-    connectedLogged[EXCHANGES[exKey].perpspec] = false;
+  // Track perpspec connection and completion status
+  const connectedPerpspecs = new Set();
+  const completedSymbols = {};
+  const completedPerpspecs = new Set();
+  for (const p of perpspecs) {
+    completedSymbols[p] = new Set();
   }
+
+  // #2 STATUS: connected when all perpspecs connected
+  let connectedLogged = false;
+
+  // #3 STATUS: heartbeat running logs per perpspec if not completed
+  let stopHeartbeat = false;
+  const heartbeatInterval = setInterval(async () => {
+    if (stopHeartbeat) return;
+    for (const p of perpspecs) {
+      if (!completedPerpspecs.has(p)) {
+        const msg = `${p} backfilling db.`;
+        await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg);
+        console.log(`${STATUS_LOG_COLOR}${msg}${STATUS_LOG_RESET}`);
+      }
+    }
+  }, 30 * 1000);
 
   const promises = [];
 
-  // Process each exchange
   for (const exKey of Object.keys(EXCHANGES)) {
     const config = EXCHANGES[exKey];
     const limit = pLimit(config.concurrency);
-    
+
     for (const baseSym of perpList) {
       promises.push(limit(async () => {
         const symbol = config.mapSymbol(baseSym);
 
         try {
-          // STATUS #2: Log connected on first successful start
-          if (!connectedLogged[config.perpspec]) {
-            await apiUtils.logScriptStatus(
-              dbManager,
-              SCRIPT_NAME,
-              'connected',
-              `${config.perpspec} starting fetch`
-            );
-            connectedLogged[config.perpspec] = true;
+          // Detect first successful connection per perpspec
+          if (!connectedPerpspecs.has(config.perpspec)) {
+            connectedPerpspecs.add(config.perpspec);
+            if (connectedPerpspecs.size === perpspecs.length && !connectedLogged) {
+              const connectedMsg = `${perpspecsStr} connected, starting fetch.`;
+              await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', connectedMsg);
+              console.log(`${STATUS_LOG_COLOR}${connectedMsg}${STATUS_LOG_RESET}`);
+              connectedLogged = true;
+            }
           }
 
-          // Fetch data
           const intervalStart = floorToMinute(START);
           const intervalEnd = floorToMinute(NOW);
-          
+
           const rawData = await config.fetch(symbol, config, intervalStart, intervalEnd);
 
           if (rawData.length === 0) return;
 
-          // Process data
           const processedData = config.process(rawData, baseSym, config);
-          
+
           if (processedData.length === 0) return;
 
-          // Insert to DB
           await dbManager.insertData(config.perpspec, processedData);
 
-          console.log(`✅ [${config.perpspec}] ${baseSym}: ${processedData.length} records`);
+          // Track completed symbols per perpspec
+          completedSymbols[config.perpspec].add(baseSym);
+
+          // #4 STATUS: per perpspec completed
+          const expectedCount = perpList.length;
+          if (completedSymbols[config.perpspec].size === expectedCount && !completedPerpspecs.has(config.perpspec)) {
+            const completeMsg = `${config.perpspec} backfill complete.`;
+            await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', completeMsg);
+            console.log(`${STATUS_LOG_COLOR}${completeMsg}${STATUS_LOG_RESET}`);
+            completedPerpspecs.add(config.perpspec);
+          }
+
+          // #5 STATUS: all perpspecs completed
+          if (completedPerpspecs.size === perpspecs.length) {
+            stopHeartbeat = true;
+            clearInterval(heartbeatInterval);
+            const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+            const finalMsg = `${SCRIPT_NAME} backfill completed in ${duration}s!`;
+            await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', finalMsg);
+            console.log(`${STATUS_LOG_COLOR}${finalMsg}${STATUS_LOG_RESET}`);
+          }
 
         } catch (error) {
           console.error(`❌ [${config.perpspec}] ${baseSym}: ${error.message}`);
-          
-          // Determine error type
+
+          // Determine error code
           const errorCode = error.response?.status === 429 ? 'RATE_LIMIT' :
                            error.message.includes('timeout') ? 'TIMEOUT' :
                            error.message.includes('404') ? 'NOT_FOUND' : 'FETCH_ERROR';
 
-          // Log error
           await apiUtils.logScriptError(
-            dbManager, 
-            SCRIPT_NAME, 
-            'API', 
-            errorCode, 
+            dbManager,
+            SCRIPT_NAME,
+            'API',
+            errorCode,
             `${config.perpspec} error for ${baseSym}: ${error.message}`,
             { perpspec: config.perpspec, symbol: baseSym }
           );
 
           // Log internal error if connection never established
-          if (!connectedLogged[config.perpspec]) {
+          if (!connectedPerpspecs.has(config.perpspec)) {
             await apiUtils.logScriptError(
-              dbManager, 
-              SCRIPT_NAME, 
-              'INTERNAL', 
-              'INSERT_FAILED', 
+              dbManager,
+              SCRIPT_NAME,
+              'INTERNAL',
+              'INSERT_FAILED',
               `${config.perpspec} failed to establish connection for ${baseSym}`,
               { perpspec: config.perpspec, symbol: baseSym }
             );
@@ -454,20 +486,10 @@ async function backfill() {
 
   await Promise.all(promises);
 
-  // STATUS #3: Complete per exchange
-  for (const exKey of Object.keys(EXCHANGES)) {
-    const config = EXCHANGES[exKey];
-    await apiUtils.logScriptStatus(
-      dbManager, 
-      SCRIPT_NAME, 
-      'complete', 
-      `${config.perpspec} backfill complete.`
-    );
-    console.log(`✅ ${config.perpspec} backfill complete.`);
-  }
+  // No other status logs here per instructions
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-  console.log(`\n🎉 All Long/Short Ratio backfills completed in ${duration}s!`);
+  console.log(`\n🎉 🥭 All Long/Short Ratio backfills completed in ${duration}s!`);
 }
 
 // ============================================================================
@@ -477,7 +499,7 @@ async function backfill() {
 if (require.main === module) {
   backfill()
     .then(() => {
-      console.log('✅ LSR backfill script completed successfully');
+      // console.log('✅ LSR backfill script completed successfully');
       process.exit(0);
     })
     .catch(err => {

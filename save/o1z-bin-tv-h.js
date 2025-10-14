@@ -20,6 +20,7 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.now();
 const START = NOW - DAYS * MS_PER_DAY;
 const RECENT_THRESHOLD = NOW - 10 * 60 * 1000;  // Ignore warnings for last 10min windows
+const weightMonitor = require('../b-weight');
 
 // ============================================================================
 // SHARED UTILITIES
@@ -42,8 +43,8 @@ const BINANCE = {
   source: 'bin-tv',
   url: 'https://fapi.binance.com/futures/data/takerlongshortRatio',
   limit: 500,
-  rateDelay: 25,  // 40 req/sec = 25ms delay
-  concurrency: 10,
+  rateDelay: 100,  // 40 req/sec = 25ms delay
+  concurrency: 8,
   timeout: 15000,
   apiInterval: '5m',
   dbInterval: '1m',
@@ -74,9 +75,10 @@ async function fetchBinanceTV(symbol, startTs, endTs) {
       startTime: currentStart,
       endTime: nextEnd
     };
-
+//********************* below, lime 81 added 13 Oct B-Weight */
     try {
       const response = await axios.get(BINANCE.url, { params, timeout: BINANCE.timeout });
+      weightMonitor.logRequest('bin-tv', '/futures/data/takerlongshortRatio', 1);
       const data = response.data;
 
       if (!data || data.length === 0) break;
