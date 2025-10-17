@@ -47,8 +47,8 @@ const EXCHANGES = {
     source: 'bin-lsr',
     url: 'https://fapi.binance.com/futures/data/globalLongShortAccountRatio',
     limit: 500,
-    rateDelay: 100,  // 40 req/sec = 25ms delay
-    concurrency: 10,
+    rateDelay: 200,  // 40 req/sec = 25ms delay
+    concurrency: 5,
     timeout: 8000,
     apiInterval: '5m',
     dbInterval: '1m',
@@ -114,7 +114,7 @@ async function fetchBinanceLSR(symbol, config, startTs, endTs) {
       startTime: currentStart,
       endTime: nextEnd  // ADD THIS LINE
     };
-//******************************** below line, 116 added Oct 13 for b-Weight   */
+//******************************** below line, 120 added Oct 13 for b-Weight   */
     try {
       const response = await axios.get(config.url, { params, timeout: config.timeout });
       weightMonitor.logRequest('bin-lsr', '/futures/data/globalLongShortAccountRatio', 1);
@@ -448,7 +448,7 @@ async function backfill() {
             const duration = ((Date.now() - startTime) / 1000).toFixed(2);
             const finalMsg = `${SCRIPT_NAME} backfill completed in ${duration}s!`;
             await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', finalMsg);
-            console.log(`${STATUS_LOG_COLOR}${finalMsg}${STATUS_LOG_RESET}`);
+            console.log(`🍐 ${finalMsg}`);
           }
 
         } catch (error) {

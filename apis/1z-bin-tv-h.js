@@ -401,7 +401,7 @@ async function backfill() {
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     const finalMessage = `${SCRIPT_NAME} backfill completed in ${duration}s!`;
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', finalMessage);
-    console.log(`${STATUS_COLOR}🧞 ${finalMessage}${RESET}`);
+    console.log(`🧞 ${finalMessage}`);
   }
 }
 

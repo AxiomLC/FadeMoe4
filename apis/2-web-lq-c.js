@@ -1,10 +1,11 @@
 /* ==========================================
- * web-lq-c.js   6 Oct 2025
- * Continuous WebSocket Liquidation Collector
+ * web-lq-c.js   15 Oct 2025
+ * Continuous WebSocket Liquidation Collector with 1-minute Bucketing
  *
  * Streams liquidation data from Binance, Bybit, and OKX
- * Inserts liquidation events into the database
- * Tracks liquidation side, price, and quantity
+ * Aggregates liquidation events into 1-minute buckets per symbol
+ * Inserts aggregated liquidation data into the database
+ * Tracks liquidation side (majority), average price, and total quantity per minute
  * ========================================== */
 
 const WebSocket = require('ws');
@@ -17,10 +18,6 @@ const SCRIPT_NAME = 'web-lq-c.js';
 const STATUS_COLOR = '\x1b[96m'; // Bright cyan (blue-green)
 const RESET = '\x1b[0m';
 
-/* ==========================================
- * EXCHANGE CONFIGURATION
- * Defines WebSocket URLs, perpspec names, and symbol mapping
- * ========================================== */
 const EXCHANGE_CONFIG = {
   BINANCE: {
     PERPSPEC: 'bin-lq',
@@ -40,14 +37,13 @@ const EXCHANGE_CONFIG = {
   }
 };
 
-// Track liquidations per exchange for periodic status logging
+// Track liquidation counts for status logging
 const liquidationCounts = {
   'bin-lq': 0,
   'byb-lq': 0,
   'okx-lq': 0
 };
 
-// Last status log time per perpspec
 const lastStatusLog = {
   'bin-lq': Date.now(),
   'byb-lq': Date.now(),
@@ -56,93 +52,197 @@ const lastStatusLog = {
 
 const STATUS_LOG_INTERVAL = 60000; // 1 minute
 
-/* ==========================================
- * DATA PROCESSING & INSERTION
- * Parse WebSocket messages and insert into database
- * ========================================== */
+// In-memory buckets for aggregation: { perpspec: { symbol: { bucketTs: bucketData } } }
+const buckets = {
+  'bin-lq': new Map(),
+  'byb-lq': new Map(),
+  'okx-lq': new Map()
+};
 
-/**
- * Process and insert liquidation record into database
- */
+// Helper: Get bucket timestamp (floor to nearest minute)
+function getBucketTs(ts) {
+  return Math.floor(ts / 60000) * 60000;
+}
+
+// Helper: Update or create bucket for given perpspec and symbol
+function updateBucket(perpspec, symbol, ts, side, price, qty) {
+  if (!buckets[perpspec].has(symbol)) {
+    buckets[perpspec].set(symbol, new Map());
+  }
+  const symbolBuckets = buckets[perpspec].get(symbol);
+  const bucketTs = getBucketTs(ts);
+
+  if (!symbolBuckets.has(bucketTs)) {
+    symbolBuckets.set(bucketTs, {
+      ts: bucketTs,
+      symbol,
+      perpspec,
+      lqsideCounts: { long: 0, short: 0 },
+      lqpriceSum: 0,
+      lqpriceCount: 0,
+      lqqtySum: 0
+    });
+  }
+
+  const bucket = symbolBuckets.get(bucketTs);
+
+  // Count sides
+  if (side === 'long') {
+    bucket.lqsideCounts.long += 1;
+  } else if (side === 'short') {
+    bucket.lqsideCounts.short += 1;
+  }
+
+  // Sum price and qty
+  bucket.lqpriceSum += price;
+  bucket.lqpriceCount += 1;
+  bucket.lqqtySum += qty;
+}
+
+// Helper: Determine majority side with tie-breaker
+async function determineLqside(bucket) {
+  const { long, short } = bucket.lqsideCounts;
+  if (long > short) return 'long';
+  if (short > long) return 'short';
+
+  // Tie-breaker: compare avg price to OHLCV high/low for symbol and bucketTs
+  const avgPrice = bucket.lqpriceSum / bucket.lqpriceCount;
+
+  // Query OHLCV for symbol and bucketTs
+  const query = `
+    SELECT h, l FROM perp_data
+    WHERE symbol = $1 AND perpspec LIKE '%ohlcv'
+      AND ts = $2
+    LIMIT 1
+  `;
+  try {
+    const result = await dbManager.pool.query(query, [bucket.symbol, BigInt(bucket.ts)]);
+    if (result.rows.length === 0) {
+      // No OHLCV data, default to 'long'
+      return 'long';
+    }
+    const { h, l } = result.rows[0];
+    if (h === null || l === null) return 'long';
+
+    // Determine which is closer
+    const distToLow = Math.abs(avgPrice - parseFloat(l));
+    const distToHigh = Math.abs(avgPrice - parseFloat(h));
+    return distToLow <= distToHigh ? 'long' : 'short';
+  } catch (error) {
+    console.error(`Error fetching OHLCV for tie-breaker: ${error.message}`);
+    return 'long'; // default fallback
+  }
+}
+
+// Flush buckets older than threshold (e.g., older than now - 1 minute)
+async function flushBuckets() {
+  const now = Date.now();
+  const threshold = now - 60000; // 1 minute ago
+
+  for (const perpspec of Object.keys(buckets)) {
+    const symbolBucketsMap = buckets[perpspec];
+    for (const [symbol, bucketMap] of symbolBucketsMap.entries()) {
+      for (const [bucketTs, bucket] of bucketMap.entries()) {
+        if (bucketTs < threshold) {
+          // Determine lqside with tie-breaker if needed
+          bucket.lqside = await determineLqside(bucket);
+          bucket.lqprice = bucket.lqpriceSum / bucket.lqpriceCount;
+          bucket.lqqty = bucket.lqqtySum;
+
+          // Prepare record for DB insert - ts as BigInt here
+          const record = {
+            ts: BigInt(bucket.ts),
+            symbol: bucket.symbol,
+            source: perpspec,
+            perpspec,
+            lqside: bucket.lqside,
+            lqprice: bucket.lqprice,
+            lqqty: bucket.lqqty
+          };
+
+          try {
+            await dbManager.insertData(perpspec, [record]);
+            liquidationCounts[perpspec] = (liquidationCounts[perpspec] || 0) + 1;
+          } catch (error) {
+            console.error(`Error inserting bucketed liquidation for ${perpspec} ${symbol} at ${bucket.ts}: ${error.message}`);
+          }
+
+          // Remove flushed bucket
+          bucketMap.delete(bucketTs);
+        }
+      }
+      // Remove symbol if no buckets left
+      if (bucketMap.size === 0) {
+        symbolBucketsMap.delete(symbol);
+      }
+    }
+  }
+}
+
+// Periodic flush timer
+setInterval(() => {
+  flushBuckets().catch(err => {
+    console.error('Error flushing liquidation buckets:', err);
+  });
+}, 15000); // every 15 seconds
+
+/* ==========================================
+ * Helper to safely convert timestamp to Number
+ * Accepts string, number, or BigInt
+ * ========================================== */
+function toNumberTimestamp(value) {
+  if (typeof value === 'bigint') return Number(value);
+  if (typeof value === 'string') return Number(BigInt(value));
+  if (typeof value === 'number') return value;
+  throw new Error('Invalid timestamp type');
+}
+
+/* ==========================================
+ * Process and insert liquidation record from raw event
+ * Instead of inserting raw event, update bucket
+ * ========================================== */
 async function processAndInsert(exchange, baseSymbol, rawData) {
   const config = EXCHANGE_CONFIG[exchange];
   if (!config) return;
 
   const perpspec = config.PERPSPEC;
-  let record = null;
 
   try {
+    let ts, side, price, quantity;
+
     if (exchange === 'BINANCE') {
       const o = rawData.o;
-      const ts = apiUtils.toMillis(BigInt(o.T));
-      
-      // Binance side: BUY = long liquidated, SELL = short liquidated
-      const side = o.S === 'BUY' ? 'short' : 'long';
-      const price = parseFloat(o.p);
-      const quantity = parseFloat(o.q);
-
-      record = {
-        ts,
-        symbol: baseSymbol,
-        source: perpspec,
-        perpspec,
-        lqside: side,
-        lqprice: price,
-        lqqty: quantity
-      };
+      ts = toNumberTimestamp(o.T);
+      side = o.S === 'BUY' ? 'short' : 'long'; // Binance side logic
+      price = parseFloat(o.p);
+      quantity = parseFloat(o.q);
 
     } else if (exchange === 'BYBIT') {
-      const ts = apiUtils.toMillis(BigInt(rawData.T));
-      
-      // Bybit side: Buy = long liquidated, Sell = short liquidated
-      const side = rawData.S === 'Buy' ? 'long' : 'short';
-      const price = parseFloat(rawData.p);
-      const quantity = parseFloat(rawData.v);
-
-      record = {
-        ts,
-        symbol: baseSymbol,
-        source: perpspec,
-        perpspec,
-        lqside: side,
-        lqprice: price,
-        lqqty: quantity
-      };
+      ts = toNumberTimestamp(rawData.T);
+      side = rawData.S === 'Buy' ? 'long' : 'short'; // Bybit side logic
+      price = parseFloat(rawData.p);
+      quantity = parseFloat(rawData.v);
 
     } else if (exchange === 'OKX') {
-      const ts = apiUtils.toMillis(BigInt(rawData.ts));
-      
-      // OKX side: buy = short liquidated, sell = long liquidated
-      const side = rawData.side === 'buy' ? 'short' : 'long';
-      const price = parseFloat(rawData.bkPx);
-      const quantity = parseFloat(rawData.sz);
+      ts = toNumberTimestamp(rawData.ts);
+      side = rawData.side === 'buy' ? 'short' : 'long'; // OKX side logic
+      price = parseFloat(rawData.bkPx);
+      quantity = parseFloat(rawData.sz);
 
-      record = {
-        ts,
-        symbol: baseSymbol,
-        source: perpspec,
-        perpspec,
-        lqside: side,
-        lqprice: price,
-        lqqty: quantity
-      };
+    } else {
+      return;
     }
 
-    if (!record) return;
+    // Update bucket with event data
+    updateBucket(perpspec, baseSymbol, ts, side, price, quantity);
 
-    // Insert into database
-    await dbManager.insertData(perpspec, [record]);
-
-    // Track liquidation count
-    liquidationCounts[perpspec]++;
-
-    // Periodic status logging (every 1 minute)
+    // Periodic status logging
     const now = Date.now();
     if (!lastStatusLog[perpspec] || now - lastStatusLog[perpspec] >= STATUS_LOG_INTERVAL) {
-        const message = `👾 ${perpspec} posted ${liquidationCounts[perpspec] || 0} liquidations`;
-        await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message, { perpspec });
-        console.log(`${STATUS_COLOR}${message}${RESET}`);
-        lastStatusLog[perpspec] = now;
+      const message = `👾 ${perpspec} posted ${liquidationCounts[perpspec] || 0} liquidation buckets`;
+      await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message, { perpspec });
+      console.log(`${STATUS_COLOR}${message}${RESET}`);
+      lastStatusLog[perpspec] = now;
     }
   } catch (error) {
     await apiUtils.logScriptError(
@@ -151,7 +251,7 @@ async function processAndInsert(exchange, baseSymbol, rawData) {
       'API',
       'PARSE_ERROR',
       error.message,
-      { perpspec: config.PERPSPEC, symbol: baseSymbol }
+      { perpspec, symbol: baseSymbol }
     );
     console.error(`[${perpspec}] Parse error for ${baseSymbol}:`, error.message);
   }
@@ -213,27 +313,20 @@ function bybitWebSocket() {
   const ws = new WebSocket(config.WS_URL);
 
   ws.on('open', () => {
-    const subscribeMsg = {
-      op: 'subscribe',
-      args: ['liquidation']
-    };
-    ws.send(JSON.stringify(subscribeMsg));
+    // Subscribe to allLiquidation.{symbol} for each symbol
+    const args = perpList.map(sym => `allLiquidation.${config.mapSymbol(sym)}`);
+    ws.send(JSON.stringify({ op: 'subscribe', args }));
   });
 
   ws.on('message', async (data) => {
     try {
       const message = JSON.parse(data);
-
       if (!message.data || !Array.isArray(message.data)) return;
 
-      const topic = message.topic || '';
-      const symbolFromTopic = topic.split('.')[1];
-
-      const baseSymbol = perpList.find(sym => config.mapSymbol(sym) === symbolFromTopic);
-      if (!baseSymbol) return;
-
-      // Process each liquidation in the array
       for (const lqEvent of message.data) {
+        const baseSymbol = perpList.find(sym => config.mapSymbol(sym) === lqEvent.s);
+        if (!baseSymbol) continue;
+
         await processAndInsert('BYBIT', baseSymbol, lqEvent);
       }
     } catch (error) {
@@ -286,10 +379,8 @@ async function okxWebSocket() {
   ws.on('message', async (data) => {
     try {
       const message = JSON.parse(data);
-
       if (!message.data || !Array.isArray(message.data) || message.data.length === 0) return;
 
-      // Loop through each instrument in data array
       for (const instrument of message.data) {
         const instId = instrument.instId;
         if (!instId) continue;
@@ -297,9 +388,8 @@ async function okxWebSocket() {
         const baseSymbol = perpList.find(sym => config.mapSymbol(sym) === instId);
         if (!baseSymbol) continue;
 
-        // Loop through liquidation details (nested array)
         if (!instrument.details || !Array.isArray(instrument.details)) continue;
-        
+
         for (const lqEvent of instrument.details) {
           await processAndInsert('OKX', baseSymbol, lqEvent);
         }
@@ -336,20 +426,16 @@ async function okxWebSocket() {
 
 /* ==========================================
  * MAIN EXECUTION
- * Start all WebSocket connections and log status
  * ========================================== */
 async function execute() {
   console.log(`${STATUS_COLOR}💀 Starting ${SCRIPT_NAME} - WebSocket liquidation streaming${RESET}`);
 
-  // Status: Started
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);
 
-  // Start all WebSocket connections
   binanceWebSocket();
   bybitWebSocket();
   okxWebSocket();
 
-  // Graceful shutdown handler
   process.on('SIGINT', async () => {
     console.log(`💀 ${STATUS_COLOR}\n${SCRIPT_NAME} received SIGINT, stopping...${RESET}`);
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', `${SCRIPT_NAME} stopped smoothly`);

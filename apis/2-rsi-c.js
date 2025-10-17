@@ -1,5 +1,5 @@
 /* ==========================================
- * rsi-c.js - 9 Oct 2025 Continuous RSI Polling Script
+ * rsi-c.js - 16 Oct 2025 Continuous RSI Polling Script
  * Polls new 1m data from bin-ohlcv, computes RSI11 (rsi1) and RSI11 on rolling 60min agg (rsi60)
  * Inserts into rsi perpspec/source at 1m intervals (ON CONFLICT DO NOTHING)
  * Assumes backfill done via rsi9.js; incremental cache for efficiency
@@ -25,6 +25,8 @@ const INTERVAL = '1m';
 const ROLLING_WINDOW_MIN = 60; // For initial fetch
 const INITIAL_WINDOW_MS = 24 * 60 * 60 * 1000; // 1 day for initial cache fill
 const ROLLING_HOURS = 24; // Use last 24 hours of 1m for ~24 60m bars in rsi60
+let isShuttingDown = false;
+let isProcessing = false;
 
 // Database pool
 const pool = new Pool({
@@ -60,6 +62,13 @@ async function getSymbols() {
 
 // Fetch recent 1m data (initial: last 1 day for full cache; polls: last 2min incremental)
 async function fetchRecentRecentData(symbol) {
+  // Check if we're shutting down
+  if (isShuttingDown) {
+    console.log(`Shutdown requested, skipping fetch for ${symbol}`);
+    return [];
+  }
+
+  isProcessing = true;
   try {
     const timeWindow = priceCache.has(symbol) ? 2 * 60 * 1000 : INITIAL_WINDOW_MS; // 2min poll or 1 day initial
     const query = `
@@ -81,6 +90,8 @@ async function fetchRecentRecentData(symbol) {
     console.error(`Error fetching recent data for ${symbol}:`, error.message);
     await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'DATABASE', 'FETCH_ERROR', error.message, { symbol });
     return [];
+  } finally {
+    isProcessing = false;
   }
 }
 
@@ -144,9 +155,9 @@ function calculateRSI(prices, period) {
   let avgLoss = losses / period || 1e-10;
   let rs = avgGain / avgLoss;
   let rsi = 100 - (100 / (1 + rs));
-  rsiValues.push({ 
-    ts: prices[period].ts, 
-    rsi: Math.round(rsi * 100) / 100 
+  rsiValues.push({
+    ts: prices[period].ts,
+    rsi: Math.round(rsi * 100) / 100
   });
 
   // Smoothed for subsequent periods
@@ -158,9 +169,9 @@ function calculateRSI(prices, period) {
     avgLoss = (avgLoss * (period - 1) + loss) / period || 1e-10;
     rs = avgGain / avgLoss;
     rsi = 100 - (100 / (1 + rs));
-    rsiValues.push({ 
-      ts: prices[i].ts, 
-      rsi: Math.round(rsi * 100) / 100 
+    rsiValues.push({
+      ts: prices[i].ts,
+      rsi: Math.round(rsi * 100) / 100
     });
   }
   return rsiValues;
@@ -222,11 +233,11 @@ async function pollAllSymbols() {
 
 // Main execution (like all-pfr-c.js)
 async function execute() {
-  console.log(`${STATUS_COLOR}📈 Starting ${SCRIPT_NAME} - Continuous RSI polling${RESET}`);
+  console.log(`${STATUS_COLOR}🚦 Starting ${SCRIPT_NAME} - Continuous RSI polling${RESET}`);
   // Status: started
   const startMsg = `${SCRIPT_NAME} connected`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', startMsg);
-  console.log(`${STATUS_COLOR}${startMsg}${RESET}`);
+  console.log(`${STATUS_COLOR}🚦 ${startMsg}${RESET}`);
 
   // Initial poll (loads 1 day for full cache)
   await pollAllSymbols();
@@ -241,7 +252,7 @@ async function execute() {
     try {
       await pollAllSymbols();
       // Status: running after each cycle
-      const cycleMsg = `${SCRIPT_NAME} 1m rsi Calc done`;
+      const cycleMsg = `${SCRIPT_NAME}🚥 1m rsi Calc done`;
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', cycleMsg);
       console.log(`${STATUS_COLOR}${cycleMsg}${RESET}`);
     } catch (error) {
@@ -254,7 +265,15 @@ async function execute() {
   process.on('SIGINT', async () => {
     clearInterval(pollIntervalId);
     console.log(`${STATUS_COLOR}\n${SCRIPT_NAME} received SIGINT, stopping...${RESET}`);
-    const stopMsg = `📈 ${SCRIPT_NAME} stopped smoothly`;
+    isShuttingDown = true;
+
+    // Wait for the current operation to complete
+    while (isProcessing) {
+      console.log('Waiting for current operation to complete before shutdown...');
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    const stopMsg = `🚥 ${SCRIPT_NAME} stopped smoothly`;
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', stopMsg);
     console.log(`${STATUS_COLOR}${stopMsg}${RESET}`);
     await pool.end();
@@ -265,7 +284,7 @@ async function execute() {
 // Run if direct
 if (require.main === module) {
   execute()
-    .then(() => console.log(`${STATUS_COLOR}📈 RSI continuous polling started${RESET}`))
+    .then(() => console.log(`${STATUS_COLOR}🚦 RSI continuous polling started${RESET}`))
     .catch(err => {
       console.error('💥 RSI continuous polling failed:', err);
       process.exit(1);

@@ -1,5 +1,5 @@
 /* ==========================================
- * o1z-web-ohlcv-c.js   (Revised 14 Oct 2025)
+ * 1z-web-ohlcv-c.js   (Revised 14 Oct 2025)
  * Continuous WebSocket OHLCV Collector
  * ========================================== */
 
@@ -9,7 +9,7 @@ const dbManager = require('../db/dbsetup');
 const perpList = require('../perp-list');
 require('dotenv').config();
 
-const SCRIPT_NAME = 'o1z-web-ohlcv-c.js';
+const SCRIPT_NAME = '1z-web-ohlcv-c.js';
 
 /* ==========================================
  * USER LOG COLOR CONTROLS
@@ -88,8 +88,8 @@ async function checkAllConnected() {
   if (!connectedLogged && connectedFlags.BINANCE && connectedFlags.BYBIT && connectedFlags.OKX) {
     connectedLogged = true;
     const perpspecs = 'bin-ohlcv, byb-ohlcv, okx-ohlcv';
-    const message = `🛫 ${perpspecs} websockets connected, fetching started.`;
-    console.log(`${STATUS_COLOR} ${message}${RESET}`);
+    const message = `${perpspecs} websockets connected, fetching started.`;
+    console.log(`✈️ ${STATUS_COLOR} ${message}${RESET}`);
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', message);
   }
 }
@@ -126,7 +126,7 @@ async function insertMT(perpspec, mtRecord) {
   try {
     if (!mtRecord) return;
     await dbManager.insertData(perpspec, [mtRecord]);
-    console.log(`${STATUS_COLOR}✈️ MT Market Trend token 1m${RESET}`);
+    console.log(`🛫 ${STATUS_COLOR}MT Market Trend token 1m${RESET}`);
   } catch (error) {
     await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'INTERNAL', 'MT_INSERT_FAILED', error.message);
     console.error(`${ERROR_COLOR}❌ MT insert failed: ${error.message}${RESET}`);
@@ -173,7 +173,7 @@ async function processAndInsert(exchange, baseSymbol, rawData) {
 
     const expectedCount = exchange === 'BYBIT' ? bybitActiveSymbols.size : perpList.length;
     if (completedSymbols[perpspec].size === expectedCount) {
-      const msg = `${STATUS_COLOR}${perpspec} 1min ohlcv for ${expectedCount} symbols${RESET}`;
+      const msg = `🛫 ${STATUS_COLOR}${perpspec} 1min ohlcv for ${expectedCount} symbols${RESET}`;
       console.log(msg);
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg.replace(STATUS_COLOR, '').replace(RESET, ''));
 
@@ -269,7 +269,7 @@ async function okxWebSocket() {
  * MAIN EXECUTION
  * ========================================== */
 async function execute() {
-  console.log(`${STATUS_COLOR}✈️ Starting ${SCRIPT_NAME} - WebSocket OHLCV streaming${RESET}`);
+  console.log(`✈️ ${STATUS_COLOR} Starting ${SCRIPT_NAME} - WebSocket OHLCV streaming${RESET}`);
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);
 
   binanceWebSocket();
@@ -277,7 +277,7 @@ async function execute() {
   okxWebSocket();
 
   process.on('SIGINT', async () => {
-    console.log(`\n${STATUS_COLOR}✈️ ${SCRIPT_NAME} received SIGINT, stopping...${RESET}`);
+    console.log(`\n✈️ ${SCRIPT_NAME} received SIGINT, stopped smoothly`);
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', `${SCRIPT_NAME} stopped smoothly`);
     process.exit(0);
   });

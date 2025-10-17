@@ -32,7 +32,7 @@ const EXCHANGES = {
     perpspec: 'bin-oi',
     url: 'https://fapi.binance.com/futures/data/openInterestHist',
     limit: 500,
-    rateDelay: 100,
+    rateDelay: 200,
     concurrency: 3,
     timeout: 15000,
     apiInterval: '5m',
@@ -234,7 +234,7 @@ function processOkxData(rawData, baseSymbol, config) {
 // ============================================================================
 async function backfill() {
   const startTime = Date.now();
-  console.log(`\n🐬 Starting ${SCRIPT_NAME} backfill (USD normalized)...`);
+  console.log(`\n🐬 ${STATUS_COLOR}Starting ${SCRIPT_NAME} backfill (USD normalized)...${RESET}`);
 
   // #1 Status: started
   const message1 = `Starting ${SCRIPT_NAME} backfill for Open Interest; ${totalSymbols} symbols.`;
@@ -315,10 +315,10 @@ async function backfill() {
   if (completedLogged.size === Object.keys(EXCHANGES).length) {
     const message5 = `${SCRIPT_NAME} backfill completed in ${duration}s!`;
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', message5);
-    console.log(`${STATUS_COLOR}🐬 ${message5}${RESET}`);
+    console.log(`🐬 ${message5}`);
   } else {
     const messageWarn = `${SCRIPT_NAME} backfill finished in ${duration}s (some perpspecs incomplete due to errors).`;
-    console.log(`${STATUS_COLOR}${messageWarn}${RESET}`);
+    console.log(`${messageWarn}`);
   }
 
   console.log(`\n🐬 ${SCRIPT_NAME} completed successfully.`);

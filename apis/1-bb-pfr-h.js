@@ -20,7 +20,7 @@ const RESET = '\x1b[0m'; // Reset console color
 const DAYS = 10;                      // Number of days back to fill
 const SLICE_HOURS = 12;               // Size of each slice (12h typical)
 const NUM_SLICES = 1;                 // Number of slices (1 for conservative)
-const BIN_BYB_CONCURRENCY = 12;       // Binance/Bybit concurrency
+const BIN_BYB_CONCURRENCY = 6;       // Binance/Bybit concurrency
 const TIMEOUT_MS = 10000;             // HTTP request timeout
 const RATE_DELAY = 100;               // Global throttle, normally 0
 const HEARTBEAT_INTERVAL = 10000;     // 10s heartbeat interval
@@ -43,7 +43,7 @@ const EXCHANGES = {
   BINANCE: {
     perpspec: 'bin-pfr',
     url: 'https://fapi.binance.com/fapi/v1/premiumIndexKlines',
-    limit: 1000,
+    limit: 900,
     concurrency: BIN_BYB_CONCURRENCY,
     apiInterval: '1m',
     mapSymbol: s => `${s}USDT`,
@@ -205,7 +205,7 @@ async function backfill() {
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     const finalMessage = `${SCRIPT_NAME} backfill completed in ${duration}s!`;
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', finalMessage);
-    console.log(`${STATUS_COLOR}🗽 ${finalMessage}${RESET}`);
+    console.log(`🗽 ${finalMessage}`);
   }
 }
 

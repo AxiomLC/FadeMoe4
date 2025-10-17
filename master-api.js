@@ -2,10 +2,7 @@
  * MASTER-API.JS - PRODUCTION ORCHESTRATOR (REVISED)
  * **apis\ folder: Block-based parallel execution with conditional triggers
  * Integrated status logging via apiUtils to dbsetup.js tables.
- * Revised per user instructions: no interval-based repeats, no suffix detection,
  * full parallel execution per block, DB-driven heartbeat after Block 2 start,
- * streamlined stopping logic, user stoppage stops all scripts,
- * error logging on unexpected shutdown, and heartbeat frequency control.
  * ======================================================= */
 
 const fs = require('fs');
@@ -13,6 +10,7 @@ const path = require('path');
 const pLimit = require('p-limit');
 const apiUtils = require('./api-utils');
 const dbManager = require('./db/dbsetup');
+const calcMetrics = require('./db/calc-metrics'); // Connect calc-metrics
 
 // User Controls - Adjust script block prefixes & triggers
 const BLOCK_1_PREFIX = '1-';
@@ -22,6 +20,9 @@ const TRIGGER_1Z_PREFIX = '1z-';
 
 // User-configurable heartbeat frequency in milliseconds
 const HEARTBEAT_INTERVAL_MS = 60000; // Default 1 minute
+
+const STATUS_COLOR = '\x1b[35m\x1b[1m'; // Light purple for key status logs
+const RESET = '\x1b[0m';
 
 class MasterAPI {
   constructor() {
@@ -33,9 +34,9 @@ class MasterAPI {
 
   // Initialization - Discover scripts from apis/ folder
   async initialize() {
-    console.log('\x1b[35m\x1b[1m#### 🚀 MASTER API INITIALIZING ####\x1b[0m');
+    console.log(`${STATUS_COLOR}#### 🚀 MASTER API INITIALIZING ####${RESET}`);
     await this.discoverScripts();
-    console.log(`\x1b[35m\x1b[1m#### ✅ FOUND ${this.scripts.length} SCRIPTS IN apis/ ####\x1b[0m`);
+    console.log(`${STATUS_COLOR}#### ✅ FOUND ${this.scripts.length} SCRIPTS IN apis/ ####${RESET}`);
 
     await apiUtils.logScriptStatus(
       dbManager,
@@ -59,10 +60,11 @@ class MasterAPI {
             name: file,
             path: fullPath,
             mtime: stats.mtime,
-            block: this.determineBlock(file)
+            block: this.determineBlock(file),
+            isTrigger: file === TRIGGER_FILE,
+            is1z: file.startsWith(TRIGGER_1Z_PREFIX)
           };
-        })
-        .sort((a, b) => a.name.localeCompare(b.name));
+        });
     } catch (error) {
       console.error('❌ Error discovering scripts:', error.message);
       this.scripts = [];
@@ -78,16 +80,15 @@ class MasterAPI {
   }
 
   // Run all Block 1 scripts fully in parallel
-  // Trigger 1z scripts only after trigger file completes successfully
   async runBlock1() {
     const block1Scripts = this.scripts.filter(s => s.block === 'block1');
 
     if (block1Scripts.length === 0) {
-      console.log('\x1b[35m\x1b[1m#### ⚠️ NO BLOCK 1 SCRIPTS FOUND ####\x1b[0m');
+      console.log(`${STATUS_COLOR}#### ⚠️ NO BLOCK 1 SCRIPTS FOUND ####${RESET}`);
       return;
     }
 
-    console.log(`\x1b[35m\x1b[1m#### 🔄 STARTING BLOCK 1: ${block1Scripts.map(s => s.name).join(', ')} ####\x1b[0m`);
+    console.log(`${STATUS_COLOR}#### 🔄 STARTING BLOCK 1: ${block1Scripts.map(s => s.name).join(', ')} ####${RESET}`);
 
     await apiUtils.logScriptStatus(dbManager, 'master-api', 'running', 'Block 1 scripts started');
 
@@ -98,27 +99,27 @@ class MasterAPI {
     // Check trigger file success to start 1z scripts
     const triggerResult = results.find(r => r.value?.script === TRIGGER_FILE);
     if (triggerResult && triggerResult.status === 'fulfilled' && triggerResult.value.success) {
-      console.log(`\x1b[35m\x1b[1m#### ⚡ TRIGGER: ${TRIGGER_FILE} COMPLETE - STARTING 1z SCRIPTS ####\x1b[0m`);
+      console.log(`${STATUS_COLOR}#### ⚡ TRIGGER: ${TRIGGER_FILE} COMPLETE - STARTING 1z SCRIPTS ####${RESET}`);
       this.runBlock1z(); // Start 1z scripts (non-blocking)
     } else {
-      console.error(`\x1b[35m\x1b[1m#### 🚨🚨🚨 CRITICAL: ${TRIGGER_FILE} FAILED OR NOT FOUND - 1z SCRIPTS BLOCKED 🚨🚨🚨 ####\x1b[0m`);
+      console.error(`${STATUS_COLOR}#### 🚨🚨🚨 CRITICAL: ${TRIGGER_FILE} FAILED OR NOT FOUND - 1z SCRIPTS BLOCKED 🚨🚨🚨 ####${RESET}`);
     }
 
-    console.log('\x1b[35m\x1b[1m#### ✅ BLOCK 1 COMPLETE ####\x1b[0m');
+    console.log(`${STATUS_COLOR}#### ✅ BLOCK 1 COMPLETE ####${RESET}`);
 
     await apiUtils.logScriptStatus(dbManager, 'master-api', 'running', 'Block 1 complete');
   }
 
   // Run all 1z scripts fully parallel, non-blocking
   async runBlock1z() {
-    const block1zScripts = this.scripts.filter(s => s.block === '1z');
+    const block1zScripts = this.scripts.filter(s => s.is1z);
 
     if (block1zScripts.length === 0) {
-      console.log('\x1b[35m\x1b[1m#### ⚠️ NO 1z SCRIPTS FOUND ####\x1b[0m');
+      console.log(`${STATUS_COLOR}#### ⚠️ NO 1z SCRIPTS FOUND ####${RESET}`);
       return;
     }
 
-    console.log(`\x1b[35m\x1b[1m#### ⚡ STARTING 1z SCRIPTS: ${block1zScripts.map(s => s.name).join(', ')} ####\x1b[0m`);
+    console.log(`${STATUS_COLOR}#### ⚡ STARTING 1z SCRIPTS: ${block1zScripts.map(s => s.name).join(', ')} ####${RESET}`);
 
     const promises = block1zScripts.map(script => this.runScript(script));
 
@@ -126,16 +127,15 @@ class MasterAPI {
   }
 
   // Run all Block 2 scripts fully parallel
-  // Start only after all Block 1 scripts complete
   async runBlock2() {
     const block2Scripts = this.scripts.filter(s => s.block === 'block2');
 
     if (block2Scripts.length === 0) {
-      console.log('\x1b[35m\x1b[1m#### ⚠️ NO BLOCK 2 SCRIPTS FOUND ####\x1b[0m');
+      console.log(`${STATUS_COLOR}#### ⚠️ NO BLOCK 2 SCRIPTS FOUND ####${RESET}`);
       return;
     }
 
-    console.log(`\x1b[35m\x1b[1m#### ⚡ STARTING BLOCK 2: ${block2Scripts.map(s => s.name).join(', ')} ####\x1b[0m`);
+    console.log(`${STATUS_COLOR}#### ⚡ STARTING BLOCK 2: ${block2Scripts.map(s => s.name).join(', ')} ####${RESET}`);
 
     await apiUtils.logScriptStatus(dbManager, 'master-api', 'running', 'Block 2 scripts started');
 
@@ -143,7 +143,7 @@ class MasterAPI {
 
     await Promise.allSettled(promises);
 
-    console.log('\x1b[35m\x1b[1m#### 🎯 MASTER API FULLY OPERATIONAL! LIVE DATA ACTIVE ####\x1b[0m');
+    console.log(`${STATUS_COLOR}#### 🎯 MASTER API FULLY OPERATIONAL! LIVE DATA ACTIVE ####${RESET}`);
 
     await apiUtils.logScriptStatus(dbManager, 'master-api', 'running', 'Master API fully operational, live data active');
 
@@ -154,8 +154,22 @@ class MasterAPI {
   // Run a script and return success status
   async runScript(script) {
     try {
+      // Log the full path being used
+      // Verify the file exists
+      if (!fs.existsSync(script.path)) {
+        console.error(`🚨 FILE NOT FOUND: ${script.path}`);
+        return { success: false, script: script.name, error: new Error('File not found') };
+      }
+
+      // Clear the require cache for this script to ensure we get a fresh copy
+      delete require.cache[require.resolve(script.path)];
+
       const scriptModule = require(script.path);
-      if (typeof scriptModule.backfill === 'function') {
+
+      // Execute the script based on available methods
+      if (typeof scriptModule.calculateRSIForAllSymbols === 'function') {
+        await scriptModule.calculateRSIForAllSymbols();
+      } else if (typeof scriptModule.backfill === 'function') {
         await scriptModule.backfill();
       } else if (typeof scriptModule.execute === 'function') {
         await scriptModule.execute();
@@ -164,10 +178,21 @@ class MasterAPI {
       } else {
         await require(script.path);
       }
+
       this.runningScripts.set(script.name, scriptModule);
+
       return { success: true, script: script.name };
     } catch (error) {
       console.error(`❌ Error in ${script.name}:`, error.message);
+
+      // Log error to database
+      await apiUtils.logScriptStatus(
+        dbManager,
+        script.name,
+        'error',
+        `Error in ${script.name}: ${error.message}`
+      );
+
       return { success: false, script: script.name, error };
     }
   }
@@ -181,21 +206,9 @@ class MasterAPI {
       if (!this.running) return;
 
       try {
-        // Query DB for scripts with 'running' status updated in last 3 minutes
-        const result = await dbManager.pool.query(`
-          SELECT DISTINCT perpspec AS script_name
-          FROM perp_status
-          WHERE status = 'running' AND last_updated >= NOW() - INTERVAL '3 minutes'
-        `);
-
-        const runningScripts = result.rows.map(row => row.script_name).join(', ') || 'none';
-
-        const message = `master-api is running real-time: ${runningScripts}`;
-
-        console.log(`\x1b[35m\x1b[1m#### 💓 ${message} ####\x1b[0m`);
-
+        const message = `master-api running real-time scripts`;
+        console.log(`\x1b[35m\x1b[1m#### ⏱️ ${message} ####${RESET}`);
         await apiUtils.logScriptStatus(dbManager, 'master-api', 'running', message);
-
       } catch (error) {
         console.error('❌ Error during master-api heartbeat:', error.message);
       }
@@ -204,7 +217,7 @@ class MasterAPI {
 
   // Stop heartbeat and signal running scripts to stop
   async stop() {
-    console.log('\x1b[35m\x1b[1m#### 🛑 STOPPING MASTER API ####\x1b[0m');
+    console.log(`${STATUS_COLOR}#### 🛑 STOPPING MASTER API ####${RESET}`);
 
     this.running = false;
 
@@ -226,9 +239,20 @@ class MasterAPI {
       }
     }
 
+    // Add this code to stop the calc-metrics.js process
+    if (calcMetrics && typeof calcMetrics.stopContinuously === 'function') {
+      try {
+        console.log('Stopping calc-metrics.js...');
+        await calcMetrics.stopContinuously();
+        console.log('calc-metrics.js stopped smoothly.');
+      } catch (error) {
+        console.error('Error stopping calc-metrics.js:', error.message);
+      }
+    }
+
     await apiUtils.logScriptStatus(dbManager, 'master-api', 'stopped', 'Master-Api stopped smoothly');
 
-    console.log('\x1b[35m\x1b[1m#### ✅ MASTER API STOPPED ####\x1b[0m');
+    console.log(`${STATUS_COLOR}#### ✅ MASTER API STOPPED ####${RESET}`);
   }
 
   // Start sequence: initialize → Block 1 → Block 2 → heartbeat
@@ -236,6 +260,17 @@ class MasterAPI {
     await this.initialize();
     await this.runBlock1();
     await this.runBlock2();
+
+    // Start calc-metrics in continuous mode
+    calcMetrics.runContinuously()
+      .then(() => {
+        console.log("✅ calc-metrics.js triggered"); // ADDED LOG
+      })
+      .catch(err => {
+        console.error('❌ calc-metrics failed:', err);
+        // Log the error to the database
+        apiUtils.logScriptStatus(dbManager, 'master-api', 'error', `calc-metrics failed: ${err.message}`);
+      });
   }
 }
 
@@ -264,12 +299,12 @@ if (require.main === module) {
     process.exit(1);
   });
 
-  process.on('unhandledRejection', async (reason) => {
-    console.error('\n\x1b[35m\x1b[1m#### 💥 UNHANDLED REJECTION ####\x1b[0m', reason);
-    await apiUtils.logScriptStatus(dbManager, 'master-api', 'error', `Unhandled rejection: ${reason}`);
-    await master.stop();
-    process.exit(1);
-  });
+process.on('unhandledRejection', async (reason) => {
+  console.error('\n\x1b[35m\x1b[1m#### 💥 UNHANDLED REJECTION ####\x1b[0m', reason);
+  await apiUtils.logScriptStatus(dbManager, 'master-api', 'error', `Unhandled rejection: ${reason.message}`);
+  await master.stop();
+  process.exit(1);
+});
 
   master.start().catch(async err => {
     console.error('\x1b[35m\x1b[1m#### 💥 MASTER API START FAILED ####\x1b[0m', err);

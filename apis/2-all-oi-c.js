@@ -81,7 +81,8 @@ async function processBinanceData(rawData, baseSymbol, config) {
   const perpspec = config.PERPSPEC;
   try {
     const oiContracts = parseFloat(rawData.openInterest);
-    const timestamp = rawData.time;
+    const timestampRaw = rawData.time;
+    const timestamp = Math.floor(timestampRaw / 60000) * 60000;
     if (isNaN(oiContracts)) return null;
 
     // Determine contract multiplier
@@ -150,7 +151,8 @@ function processOkxData(rawData, baseSymbol, config) {
   try {
     const dataPoint = rawData[0];
     const oiUsd = parseFloat(dataPoint.oiUsd ?? dataPoint.oi);
-    const timestamp = dataPoint.ts;
+    const timestampRaw = dataPoint.ts;
+    const timestamp = Math.floor(timestampRaw / 60000) * 60000;
     if (isNaN(oiUsd)) return null;
 
     return {
@@ -217,9 +219,9 @@ async function pollSymbolAndExchange(baseSymbol, exchangeConfig) {
     if (!connectedPerpspecs.has(perpspec) && processedData) {
       connectedPerpspecs.add(perpspec);
       if (connectedPerpspecs.size === Object.keys(EXCHANGE_CONFIG).length) {
-        const message = `♻️ ${Object.values(EXCHANGE_CONFIG).map(cfg => cfg.PERPSPEC).join(', ')} connected; fetching.`;
+        const message = `${Object.values(EXCHANGE_CONFIG).map(cfg => cfg.PERPSPEC).join(', ')} connected; fetching.`;
         await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', message);
-        console.log(`${STATUS_COLOR}${message}${RESET}`);
+        console.log(`${STATUS_COLOR}♻️ ${message}${RESET}`);
       }
     }
 
@@ -271,9 +273,9 @@ async function pollAllSymbols() {
 async function execute() {
   // Log #1: Script start
   const totalSymbols = perpList.length;
-  const startMessage = `♻️ Starting ${SCRIPT_NAME} real-time 1m pull; ${totalSymbols} symbols.`;
+  const startMessage = `Starting ${SCRIPT_NAME} real-time 1m pull; ${totalSymbols} symbols.`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', startMessage);
-  console.log(`${STATUS_COLOR}${startMessage}${RESET}`);
+  console.log(`${STATUS_COLOR}♻️ ${startMessage}${RESET}`);
 
   await pollAllSymbols();
 

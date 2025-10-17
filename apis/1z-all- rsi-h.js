@@ -13,7 +13,7 @@ require('dotenv').config();
 const apiUtils = require('../api-utils'); // For status/error logging
 const dbManager = require('../db/dbsetup'); // Provides dbManager for queries/inserts
 
-const SCRIPT_NAME = 'o1z-rsi-h.js';
+const SCRIPT_NAME = '1z-rsi-h.js';
 const PERIOD = 11; // RSI period - change this to adjust for all calculations
 const INTERVAL = '1m'; // Fixed 1m interval for all insertions (DB is 1m-based)
 const AGGREGATE_MINUTES = 60; // Aggregation interval for RSI60 in minutes (60m = 1 hour) - can be changed for testing
@@ -133,7 +133,7 @@ async function calculateRSIForSymbol(symbol) {
     }
 
     const values = insertionData.map(data => [Math.round(data.rsi1), Math.round(data.rsi60), data.tsMs, symbol, PERPSPEC_SOURCE, PERPSPEC_SOURCE, INTERVAL]); // Explicit round for no decimals
-    const upsertQuery = format(`INSERT INTO perp_data (rsi1, rsi60, ts, symbol, source, perpspec, interval) VALUES %L ON CONFLICT (ts, symbol, source) DO NOTHING`, values);
+    const upsertQuery = format(`INSERT INTO perp_data (rsi1, rsi60, ts, symbol, source, perpspec, interval) VALUES %L ON CONFLICT (ts, symbol, perpspec) DO NOTHING`, values);
     const resultUpsert = await pool.query(upsertQuery);
     return true;
   } catch (error) {

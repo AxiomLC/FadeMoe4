@@ -18,7 +18,7 @@ const weightMonitor = require('../b-weight');
 // ============================================================================
 // USER CONFIGURATION
 // ============================================================================
-const STATUS_LOG_COLOR = '\x1b[38;2;135;206;235m'; // #87CEEB Sky Blue
+const STATUS_LOG_COLOR = '\x1b[38;2;135;206;235m'; // #882b87ff Sky Blue
 const COLOR_RESET = '\x1b[0m';
 
 // User-adjustable final pull records count for ALL exchanges
@@ -36,8 +36,8 @@ const EXCHANGES = {
     source: 'bin-ohlcv',
     url: 'https://fapi.binance.com/fapi/v1/klines',
     limit: 800,
-    rateDelay: 200,
-    concurrency: 9,
+    rateDelay: 300,
+    concurrency: 6,
     timeout: 10000,
     apiInterval: '1m',
     dbInterval: '1m',
@@ -62,7 +62,7 @@ const EXCHANGES = {
     source: 'okx-ohlcv',
     url: 'https://www.okx.com/api/v5/market/history-candles',
     limit: 300,
-    rateDelay: 40,
+    rateDelay: 200,
     concurrency: 5,
     timeout: 9000,
     retrySleepMs: 500,
@@ -128,7 +128,7 @@ async function checkAndLogAllConnected() {
       connectionStatus['byb-ohlcv'] && connectionStatus['okx-ohlcv']) {
     allConnected = true;
     const perpspecs = 'bin-ohlcv, byb-ohlcv, okx-ohlcv';
-    await logStatus('connected', `${perpspecs} connected, starting fetch.`);
+    await logStatus('connected', `🔗 ${perpspecs} connected, starting fetch.`);
   }
 }
 
@@ -143,7 +143,7 @@ async function checkAndLogAllCompleted(startTime) {
   if (completionStatus['bin-ohlcv'] && completionStatus['byb-ohlcv'] && 
       completionStatus['okx-ohlcv']) {
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    await logStatus('completed', `🤖 ${SCRIPT_NAME} backfill completed in ${duration}s!`);
+    await logStatus('completed', `🔗 ${SCRIPT_NAME} backfill completed in ${duration}s!`);
   }
 }
 
@@ -360,7 +360,7 @@ function processOKXData(rawCandles, baseSymbol, config) {
 // ============================================================================
 async function createMTToken() {
   try {
-    console.log('🤖 Creating MT token...');
+    console.log('Create MT token');
     
     const mtData = await Promise.all(MT_SYMBOLS.map(async (sym) => {
       const query = `SELECT ts, o::numeric AS open, h::numeric AS high, l::numeric AS low, c::numeric AS close, v::numeric AS volume
@@ -425,7 +425,7 @@ async function createMTToken() {
 
     if (mtRecords.length > 0) {
       await dbManager.insertData('bin-ohlcv', mtRecords);
-      console.log('✅ MT token created');
+      console.log('🔗MT token created');
     }
   } catch (error) {
     console.error('❌ MT creation failed:', error.message);
@@ -709,7 +709,7 @@ async function backfill() {
   // ========================================================================
   // STATUS LOG #1: Script Started
   // ========================================================================
-  await logStatus('started', `Starting ${SCRIPT_NAME} backfill for OHLCV data; ${symbolCount} symbols.`);
+  await logStatus('started', `🔗 Starting ${SCRIPT_NAME} backfill for OHLCV data; ${symbolCount} symbols.`);
 
   // ========================================================================
   // HEARTBEAT MONITORING - logs perpspec 'running' status every interval
@@ -775,7 +775,7 @@ async function backfill() {
   // Console notification only - no DB log
   // ========================================================================
   clearInterval(heartbeatInterval);
-  console.log(`🤖 ${STATUS_LOG_COLOR}${SCRIPT_NAME} Final Loop started.${COLOR_RESET}`);
+  console.log(`🔗 ${STATUS_LOG_COLOR}${SCRIPT_NAME} Final Loop started.${COLOR_RESET}`);
 
   try {
     // 1. Binance first

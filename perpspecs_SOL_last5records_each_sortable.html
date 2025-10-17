@@ -1,0 +1,122 @@
+
+  <!DOCTYPE html>
+  <html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Perpspec Data for SOL Last 5 Records Each</title>
+    <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.13.5/css/jquery.dataTables.min.css"/>
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.5/js/jquery.dataTables.min.js"></script>
+    <style>
+      body { font-family: Arial, sans-serif; padding: 20px; }
+      h1 { margin-bottom: 10px; }
+      p { max-width: 900px; }
+    </style>
+  </head>
+  <body>
+    <h1>Perpspec Data for SOL - Last 5 Records Each</h1>
+    
+    <p><strong>HTML example table of 5min window to DB. Technical Summary:</strong> This database stores perpetual futures data from 3 exchanges (currently) organized by "schema" <em>perpspec</em> (e.g., bin-ohlcv, byb-lsr). 
+    All data timestamps are normalized to 1-minute intervals per perpspec, making the <code>interval</code> and <code>source</code> fields redundant for analysis and thus excluded here.
+    The <code>perp_metrics</code> table currently stores pre-calculated metrics of perp_data columns only, not organized by schema/perpspecs. Other perpspecs besides ohlcv, could be stored as <code>NUMERIC(10,4)</code> for efficiency.</p>
+  
+    <table id="perpspecTable" class="display" style="width:100%">
+<thead>
+<tr><th>ts</th><th>utc_time</th><th>symbol</th><th>perpspec</th><th>o</th><th>h</th><th>l</th><th>c</th><th>v</th><th>oi</th><th>pfr</th><th>lsr</th><th>rsi1</th><th>rsi60</th><th>tbv</th><th>tsv</th><th>lqside</th><th>lqprice</th><th>lqqty</th></tr>
+</thead>
+<tbody>
+<tr><td>1760719380000</td><td>2025-10-17T16:43:00.000Z</td><td>SOL</td><td>bin-lq</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>long</td><td>181.90000000</td><td>1.11000000</td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>bin-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>3.70810000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>bin-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>3.70810000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>bin-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>3.69260000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>bin-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>3.69260000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>bin-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>3.69260000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>bin-ohlcv</td><td>182.55000000</td><td>182.89000000</td><td>182.52000000</td><td>182.83000000</td><td>2275652.08790000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>bin-ohlcv</td><td>182.83000000</td><td>182.99000000</td><td>182.68000000</td><td>182.81000000</td><td>2902300.67850000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>bin-ohlcv</td><td>182.81000000</td><td>183.25000000</td><td>182.71000000</td><td>183.12000000</td><td>8607062.44350000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>bin-ohlcv</td><td>183.13000000</td><td>183.45000000</td><td>183.01000000</td><td>183.03000000</td><td>4514674.80470000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>bin-ohlcv</td><td>183.03000000</td><td>183.28000000</td><td>182.75000000</td><td>182.82000000</td><td>2525957.80670000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>bin-oi</td><td></td><td></td><td></td><td></td><td></td><td>1368795635.98800020</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>bin-oi</td><td></td><td></td><td></td><td></td><td></td><td>1370807941.00210020</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>bin-oi</td><td></td><td></td><td></td><td></td><td></td><td>1371349752.46140000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>bin-oi</td><td></td><td></td><td></td><td></td><td></td><td>1375224673.60320020</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>bin-oi</td><td></td><td></td><td></td><td></td><td></td><td>1374836428.58910000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>bin-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00005880</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>bin-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00005880</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>bin-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00005380</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>bin-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00005380</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>bin-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00005380</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>bin-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>5315.08800000</td><td>1136.23800000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>bin-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>1728.91600000</td><td>5773.08800000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>bin-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>13492.60000000</td><td>6031.60200000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>bin-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>3292.59200000</td><td>6410.57600000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>bin-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>1735.77400000</td><td>4092.08000000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>byb-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>4.12032770</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>byb-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>4.12032770</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>byb-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>4.09424350</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>byb-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>4.09424350</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>byb-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>4.09424350</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>byb-ohlcv</td><td>182.55000000</td><td>182.89000000</td><td>182.53000000</td><td>182.84000000</td><td>853254.42800000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>byb-ohlcv</td><td>182.84000000</td><td>183.02000000</td><td>182.69000000</td><td>182.82000000</td><td>1586884.67500000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>byb-ohlcv</td><td>182.82000000</td><td>183.25000000</td><td>182.72000000</td><td>183.15000000</td><td>5281836.68500000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>byb-ohlcv</td><td>183.15000000</td><td>183.49000000</td><td>183.02000000</td><td>183.04000000</td><td>4374453.17400000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>byb-ohlcv</td><td>183.04000000</td><td>183.30000000</td><td>182.78000000</td><td>182.82000000</td><td>964975.24200000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>byb-oi</td><td></td><td></td><td></td><td></td><td></td><td>4775814.09999999</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>byb-oi</td><td></td><td></td><td></td><td></td><td></td><td>4775814.09999999</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>byb-oi</td><td></td><td></td><td></td><td></td><td></td><td>4775814.09999999</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>byb-oi</td><td></td><td></td><td></td><td></td><td></td><td>4775814.09999999</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>byb-oi</td><td></td><td></td><td></td><td></td><td></td><td>4810896.50000000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>byb-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00005126</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>byb-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00005126</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>byb-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00005126</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>byb-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00005126</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>byb-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00005126</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>byb-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>1198.00000000</td><td>1137.55000000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>byb-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>2286.15000000</td><td>2047.80000000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>byb-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>8576.60000000</td><td>5847.50000000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>byb-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>4274.96000000</td><td>1954.32000000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>byb-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>1851.10000000</td><td>764.95000000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>okx-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>2.72041187</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>okx-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>2.72041187</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>okx-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>2.67755444</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>okx-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>2.67755444</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>okx-lsr</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>2.67755444</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>okx-ohlcv</td><td>182.54000000</td><td>182.86000000</td><td>182.51000000</td><td>182.83000000</td><td>719237.25200000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>okx-ohlcv</td><td>182.83000000</td><td>182.98000000</td><td>182.68000000</td><td>182.79000000</td><td>1284685.56940000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>okx-ohlcv</td><td>182.79000000</td><td>183.23000000</td><td>182.71000000</td><td>183.13000000</td><td>4662126.61380000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>okx-ohlcv</td><td>183.14000000</td><td>183.45000000</td><td>183.02000000</td><td>183.05000000</td><td>1823617.36500000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>okx-ohlcv</td><td>183.05000000</td><td>183.28000000</td><td>182.79000000</td><td>182.83000000</td><td>890480.07740000</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>okx-oi</td><td></td><td></td><td></td><td></td><td></td><td>444922770.50250030</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>okx-oi</td><td></td><td></td><td></td><td></td><td></td><td>445719600.38970023</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>okx-oi</td><td></td><td></td><td></td><td></td><td></td><td>447056921.54900026</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>okx-oi</td><td></td><td></td><td></td><td></td><td></td><td>448033543.44500030</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>okx-oi</td><td></td><td></td><td></td><td></td><td></td><td>447715122.68800030</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>okx-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00007993</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>okx-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00007993</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>okx-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00007993</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>okx-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00007993</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>okx-pfr</td><td></td><td></td><td></td><td></td><td></td><td></td><td>0.00007993</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>okx-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>950.23000000</td><td>1018.25500000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>okx-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>805.85800000</td><td>2384.74400000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>okx-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>6953.52000000</td><td>5783.79500000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>okx-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>3512.41000000</td><td>1461.10500000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719800000</td><td>2025-10-17T16:50:00.000Z</td><td>SOL</td><td>okx-tv</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>793.87500000</td><td>1636.07000000</td><td></td><td></td><td></td></tr>
+<tr><td>1760719500000</td><td>2025-10-17T16:45:00.000Z</td><td>SOL</td><td>rsi</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>30.9900</td><td>48.7300</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719560000</td><td>2025-10-17T16:46:00.000Z</td><td>SOL</td><td>rsi</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>48.0700</td><td>49.4000</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719620000</td><td>2025-10-17T16:47:00.000Z</td><td>SOL</td><td>rsi</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>47.0700</td><td>49.3500</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719680000</td><td>2025-10-17T16:48:00.000Z</td><td>SOL</td><td>rsi</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>62.0000</td><td>50.0900</td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>1760719740000</td><td>2025-10-17T16:49:00.000Z</td><td>SOL</td><td>rsi</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>56.4100</td><td>49.8800</td><td></td><td></td><td></td><td></td><td></td></tr>
+</tbody>
+</table>
+    <script>
+      $(document).ready(function() {
+        $('#perpspecTable').DataTable({
+          order: [[0, 'asc']], // sort by ts ascending
+          paging: false,
+          scrollX: true
+        });
+      });
+    </script>
+  </body>
+  </html>
+  

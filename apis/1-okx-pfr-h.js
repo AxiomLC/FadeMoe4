@@ -32,10 +32,10 @@ const PROXY_TIMEOUT_MS = 9000;       // Longer timeout for proxy
 // SHARED SETTINGS
 const RETRY_429_MAX = 2;              // Max retries on 429 errors
 const RETRY_429_BASE_MS = 600;        // Base delay for 429 retry (exponential backoff)
-const HEARTBEAT_STATUS_INTERVAL = 25000;   // Status heartbeat every 25 sec
-const HEARTBEAT_429_INTERVAL = 20000;      // 429 error summary every 15 sec
+const HEARTBEAT_STATUS_INTERVAL = 35000;   // Status heartbeat every 25 sec
+const HEARTBEAT_429_INTERVAL = 30000;      // 429 error summary every 15 sec
 const DIRECT_PROXY_SPLIT = 50;        // Percentage of symbols using direct (rest use proxy)
-const DB_INSERT_MILESTONE = 25000;    // Log inserts every 25k records
+const DB_INSERT_MILESTONE = 50000;    // Log inserts every 25k records
 
 // ============================================================================
 // PROXY CONFIGURATION - IPRoyal HTTP Datacenter Proxy
@@ -65,7 +65,7 @@ const splitIndex = Math.ceil(perpList.length * (DIRECT_PROXY_SPLIT / 100));
 const directSymbols = perpList.slice(0, splitIndex);
 const proxySymbols = perpList.slice(splitIndex);
 
-console.log(`${STATUS_COLOR}🔨okx-pfr Symbol split: ${directSymbols.length} direct, ${proxySymbols.length} proxy${RESET}`);
+console.log(`${STATUS_COLOR}okx-pfr Symbol split: ${directSymbols.length} direct, ${proxySymbols.length} proxy${RESET}`);
 
 // ============================================================================
 // UTILITIES
@@ -132,7 +132,7 @@ async function error429Heartbeat() {
     if (new429s > 0) {
     const yellowStart = '\x1b[33m';
       const yellowEnd = '\x1b[0m';
-      const msg = `${new429s} 429's on ${newRequests} requests (Direct: ${stats.direct429Count}, Proxy: ${stats.proxy429Count}). on: ${stats.error429Symbols.size} symbols`;
+      const msg = `${new429s} 429's/${newRequests} requests (Direct: ${stats.direct429Count}, Proxy: ${stats.proxy429Count})`;
       console.log(`${yellowStart}(429) ${msg}${yellowEnd}`);
     }
     
@@ -227,7 +227,7 @@ async function fetchOKXPremium(baseSymbol, useProxy = false) {
           
           // Log at 25k milestones
           if (Math.floor(stats.recordsInserted / DB_INSERT_MILESTONE) > Math.floor(lastInsertLog / DB_INSERT_MILESTONE)) {
-            const msg = `${OKX_CONFIG.perpspec} inserted ${stats.recordsInserted} records to db`;
+            const msg = `${OKX_CONFIG.perpspec} inserted ${stats.recordsInserted} records`;
             console.log(`${STATUS_COLOR}${msg}${RESET}`);
             await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg);
             lastInsertLog = stats.recordsInserted;
@@ -251,7 +251,7 @@ async function fetchOKXPremium(baseSymbol, useProxy = false) {
           await sleep(backoff);
           continue;
         } else {
-          const errMsg = `[${baseSymbol}/${connType}] Max 429 retries exceeded`;
+          const errMsg = `[${baseSymbol}/${connType}] okx-pfr max 429 retries`;
           console.error(`${STATUS_COLOR}${errMsg}${RESET}`);
           stats.otherErrors.push({ symbol: baseSymbol, type: connType, error: 'Max 429 retries' });
           break;
@@ -314,7 +314,7 @@ function processOKXData(rawData, baseSymbol) {
 async function backfill() {
   const startTime = Date.now();
   
-  console.log(`${STATUS_COLOR}🥀 Starting ${SCRIPT_NAME} - Premium Funding Rate backfill${RESET}`);
+  console.log(`${STATUS_COLOR}🔨 Starting ${SCRIPT_NAME} - Premium Funding Rate backfill${RESET}`);
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} started`);
 
   // Start heartbeat loops
@@ -361,7 +361,7 @@ async function backfill() {
   await Promise.allSettled(tasks);
 
   const msg = `${OKX_CONFIG.perpspec} backfilling complete ${stats.symbolsCompleted} symbols. Final Loop started.`;
-  console.log(`${STATUS_COLOR}🥀 ${msg}${RESET}`);
+  console.log(`${STATUS_COLOR}🔨 ${msg}${RESET}`);
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg);
 
   // Final loop - Fetch recent 5 records per symbol
@@ -433,8 +433,8 @@ async function backfill() {
 
   // Completion summary
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-  const finalMessage = `🥀 ${SCRIPT_NAME} completed in ${duration}s`;
-  console.log(`${STATUS_COLOR}${finalMessage}${RESET}`);
+  const finalMessage = `🔨 ${SCRIPT_NAME} completed in ${duration}s`;
+  console.log(`${finalMessage}`);
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', finalMessage);
 }
 
