@@ -284,16 +284,14 @@ async function processSymbol(symbol, startTs, endTs) {
     const aggregatedData = await fetchAndAggregateData(symbol, startTs, endTs);
     let metricsInserted = 0;
 
-     let allExchangeMetrics = [];  // Collect metrics from all exchanges for this symbol
-
     for (const exchange of EXCHANGES) {
       const data = aggregatedData[exchange];
       if (data.length === 0) continue;
 
       const metrics = calculateMetricsForExchange(data);
       if (metrics.length > 0) {
-        allExchangeMetrics = allExchangeMetrics.concat(metrics);  // Collect per-exchange metrics
-        metricsInserted += metrics.length;  // Update count without insert
+        const result = await dbManager.insertMetrics(metrics);
+        metricsInserted += result.rowCount || 0;
       }
     }
 
@@ -321,44 +319,23 @@ async function calculateAllMetrics() {
     let successCount = 0;
     let errorCount = 0;
 
-    // ========================================================
     // Parallel processing with p-limit
     const limit = pLimit(PARALLEL_SYMBOLS);
     const tasks = perpList.map(symbol => 
-      limit(async () => {
-        const result = await processSymbol(symbol, startTs, endTs);
-        return result;  // Now returns metrics too
-      })
+      limit(() => processSymbol(symbol, startTs, endTs))
     );
 
     const results = await Promise.all(tasks);
 
-    // New: Collect all metrics globally
-    let allMetrics = [];
+    // Aggregate results
     results.forEach(result => {
       if (result.success) {
         successCount++;
         totalMetricsCalculated += result.metricsInserted;
-        if (result.metrics && result.metrics.length > 0) {
-          allMetrics = allMetrics.concat(result.metrics);  // Collect from all symbols/exchanges
-        }
       } else {
         errorCount++;
       }
     });
-
-    // New: Sort the collected metrics globally (ts asc, symbol asc, exchange asc)
-    allMetrics.sort((a, b) => {
-      if (a.ts !== b.ts) return Number(a.ts) - Number(b.ts);  // ts ascending (BigInt to Number)
-      if (a.symbol !== b.symbol) return a.symbol.localeCompare(b.symbol);  // symbol ascending
-      return a.exchange.localeCompare(b.exchange);  // exchange ascending
-    });
-
-    // New: Single insert for all sorted metrics (assumes dbManager.insertMetrics accepts a full array)
-    if (allMetrics.length > 0) {
-      const globalInsertResult = await dbManager.insertMetrics(allMetrics);
-      totalMetricsCalculated = globalInsertResult.rowCount || allMetrics.length;  // Update total from global insert
-    }
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     const success = errorCount === 0;

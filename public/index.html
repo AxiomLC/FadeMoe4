@@ -1,66 +1,83 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>FadeMoe4 - Database Viewer</title>
-    <link rel="stylesheet" href="css/styles.css" />
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FadeMoe4 Dashboard</title>
+<link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
-    <div id="app">
-        <!-- Header with glowing title and status box -->
-        <div class="header-container">
-            <div class="header-left">
-                <!-- LOGO COMMENT: Insert logo image here -->
-                <img src="Logo13b.png" alt="FadeMoe Logo" class="glowing-logo" />
-                <h1 class="glowing-title">FadeMoe free beta</h1>
-                <p>Moe knows trading</p>
-            </div>
-            <div id="status-box-container" class="header-right"></div>
-        </div>
+<header>
+  <h1>FadeMoe4 Dashboard</h1>
+  <div id="system-status-box" class="status-box-container"></div>
+</header>
 
-        <!-- Control Buttons -->
-        <div id="controls-container"></div>
+<main>
+  <!-- View Toggle Buttons -->
+  <section class="controls">
+    <button id="view-db-btn" class="btn btn-normal btn-active">View DB</button>
+    <button id="view-alerts-btn" class="btn btn-normal">Alert Cards</button>
+    <button id="view-backtester-btn" class="btn btn-normal">Backtester</button>
+  </section>
 
-        <!--
-        <div id="dbview2-container"></div>
-        -->
-    
-        <!-- Main Content Area -->
-        <div class="main-content">
-            <!-- Database View (default) -->
-            <div id="db-view-container" class="content-section active"></div>
-
-            <!-- Total Records Display -->
-            <div id="totalRecordsDisplay" style="text-align: center; margin-top: 10px; color: #d1d5db;"></div>
-
-            <!-- Pagination Controls -->
-            <div class="pagination">
-                <button id="prevPageBtn">Previous</button>
-                <input type="number" id="pageInput" min="1" placeholder="Page" />
-                <button id="goToPageBtn">Go</button>
-                <button id="nextPageBtn">Next</button>
-            </div>
-
-            <!-- Alert Cards View (hidden by default) -->
-            <div id="alert-view-container" class="content-section hidden">
-                <div style="color: #bbb; font-size: 1.5rem; text-align: center; margin-top: 50px;">Alert Cards - Coming Soon</div>
-            </div>
-        </div>
-
-        <!-- Modal for Schema Display -->
-        <div id="schemaModal" class="modal hidden">
-            <div class="modal-content">
-                <span id="modalCloseBtn" class="modal-close">&times;</span>
-                <div id="modalSchemaContent">Loading schema...</div>
-            </div>
-        </div>
-
+  <!-- Selectors, Refresh, Pagination in one row -->
+  <section class="controls selectors-row">
+    <div class="multi-select" id="symbol-selector">
+      <button class="multi-select-btn">Symbols ▼</button>
+      <div class="multi-select-dropdown" id="symbol-dropdown"></div>
     </div>
+    <div class="multi-select" id="exchange-selector">
+      <button class="multi-select-btn">Exch ▼</button>
+      <div class="multi-select-dropdown" id="exchange-dropdown"></div>
+    </div>
+    <div class="multi-select" id="params-selector">
+      <button class="multi-select-btn">Params ▼</button>
+      <div class="multi-select-dropdown" id="params-dropdown"></div>
+    </div>
+    <button id="refresh-btn" class="btn btn-normal glow-blue">Refresh</button>
 
-    <!-- <script src="js/dbview2.js"></script> -->
-    <script src="js/uifunctions.js"></script>
-    <script src="js/main.js"></script>
+    <button id="prev-page-btn" class="btn btn-small">← Previous</button>
+    <input type="number" id="page-input" min="1" value="1" class="page-input" inputmode="numeric" pattern="[0-9]*" />
+    <button id="go-to-page-btn" class="btn btn-small">Go</button>
+    <button id="next-page-btn" class="btn btn-small">Next →</button>
+    <span id="page-info" class="page-info">Page 1 of 1</span>
+    <span id="total-pages-display" class="page-info">Total Pages: 0</span>
+  </section>
 
+<!-- DB View -->
+<section id="db-view" class="content-section" 
+  style="display:block; justify-content:flex-start; align-items:flex-start; text-align:left;">
+  
+  <div class="table-container" 
+       style="margin:0; padding:0; background:#1e1e2f; overflow-x:auto; border-radius:8px; text-align:left;">
+    
+    <table id="data-table" class="data-table" 
+           style="width:auto; margin-left:0; margin-right:auto; border-collapse:collapse; table-layout:auto; text-align:left;">
+      <thead>
+        <tr id="table-header-row" style="text-align:left;"></tr>
+      </thead>
+      <tbody id="table-body" style="text-align:left;"></tbody>
+    </table>
+
+    <div id="table-message" class="loading" 
+         style="text-align:left; padding:4px 6px;">Select filters and click Refresh to view data</div>
+  </div>
+</section>
+
+
+  <!-- Alert Cards View -->
+  <section id="alert-view" class="content-section hidden">
+    <div class="placeholder">Alert Cards - Coming Soon</div>
+  </section>
+
+  <!-- Backtester View -->
+  <section id="backtester-view" class="content-section hidden">
+    <div class="placeholder">Backtester - Coming Soon</div>
+  </section>
+</main>
+
+<script src="js/uifunctions.js"></script>
+<script src="js/controls.js"></script>
+<script src="js/main.js"></script>
 </body>
 </html>

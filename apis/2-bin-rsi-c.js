@@ -1,5 +1,5 @@
 /* ==========================================
- * rsi-c.js - 16 Oct 2025 Continuous RSI Polling Script
+ * bin-rsi-c.js - 16 Oct 2025 Continuous RSI Polling Script
  * Polls new 1m data from bin-ohlcv, computes RSI11 (rsi1) and RSI11 on rolling 60min agg (rsi60)
  * Inserts into rsi perpspec/source at 1m intervals (ON CONFLICT DO NOTHING)
  * Assumes backfill done via rsi9.js; incremental cache for efficiency
@@ -13,13 +13,13 @@ require('dotenv').config();
 const apiUtils = require('../api-utils'); // For status logging
 const dbManager = require('../db/dbsetup'); // For insertData (from dbsetup.js)
 
-const SCRIPT_NAME = 'rsi-c.js';
+const SCRIPT_NAME = 'bin-rsi-c.js';
 const STATUS_COLOR = '\x1b[92m'; // White, lighter than \x1b[92m
 const RESET = '\x1b[0m';
 const PERIOD = 11; // Hardcoded RSI period
 const POLL_INTERVAL = 60 * 1000; // 1min polling
 const CACHE_SIZE = 1440; // Cache last 1 day 1m bars/symbol for history (rsi1) and rolling 60m (rsi60)
-const PERPSPEC_SOURCE = 'rsi';
+const PERPSPEC_SOURCE = 'bin-rsi';
 const DATA_PERPSPEC = 'bin-ohlcv';
 const INTERVAL = '1m';
 const ROLLING_WINDOW_MIN = 60; // For initial fetch

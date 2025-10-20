@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>FadeAI Backtester Console</title>
+  <style>
+    body { background:#0b0b0b; color:#ddd; font-family: 'Consolas', monospace; padding:20px; }
+    h1,h2 { color:#00c7a1; }
+    select, input {
+      background:#1a1a1a; color:#eee; border:1px solid #333; padding:5px;
+      border-radius:4px; margin:2px;
+    }
+    button {
+      background:#009688; border:none; color:#fff; padding:8px 14px; border-radius:5px;
+      margin:5px; cursor:pointer; font-weight:bold;
+    }
+    button:hover { background:#00bfa5; }
+    section { border:1px solid #222; border-radius:6px; padding:12px; margin-top:16px; }
+    .param-row { display:flex; align-items:center; margin:4px 0; flex-wrap:wrap; }
+    .param-row label { width:180px; }
+    .flex { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    #algoBox {
+      width:100%; background:#111; color:#8f8; font-family:monospace;
+      padding:8px; border-radius:6px; min-height:80px; margin-top:10px;
+    }
+    pre { background:#111; color:#9f9; padding:10px; border-radius:6px; max-height:300px; overflow:auto; }
+  </style>
+</head>
+<body>
+
+  <h1>🧠 FadeAI Backtester Console</h1>
+
+  <section>
+    <div class="flex">
+      <div>
+        <label for="exchange">Exchange:</label>
+        <select id="exchange">
+          <option>bin</option>
+          <option>byb</option>
+          <option>okx</option>
+        </select>
+      </div>
+      <div>
+        <label for="symbols">Symbols:</label>
+        <select id="symbols" multiple size="4" style="min-width:120px;"></select>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>📊 Select Parameters (DB-Loaded)</h2>
+    <div id="param-container"></div>
+  </section>
+
+  <div class="flex">
+    <button onclick="generateAlgo()">🧩 Generate Algo</button>
+    <button onclick="saveStrategy()">💾 Save JSON</button>
+    <button onclick="runBacktest()">🚀 Run Backtest</button>
+    <button onclick="getSuggestions()">🤖 AI Suggest</button>
+  </div>
+
+  <section>
+    <h2>📜 Generated Algo</h2>
+    <div id="algoBox"></div>
+  </section>
+
+  <section id="results">
+    <h2>📈 Backtest Results</h2>
+    <pre id="output"></pre>
+  </section>
+
+  <script>
+    const ops = [">","<",">=","<="];
+    let columns = [];
+    let strategy = {};
+
+    async function init(){
+      await loadSymbols();
+      await loadColumns();
+      renderParamMatrix();
+    }
+
+    async function loadSymbols(){
+      const res = await fetch('/symbols');
+      const syms = await res.json();
+      const sel = document.getElementById('symbols');
+      syms.forEach(s=>{
+        const o=document.createElement('option');
+        o.value=o.textContent=s.symbol;
+        sel.appendChild(o);
+      });
+    }
+
+    async function loadColumns(){
+      const res = await fetch('/columns');
+      columns = await res.json();
+    }
+
+    function renderParamMatrix(){
+      const cont=document.getElementById('param-container');
+      cont.innerHTML = columns.map(col=>`
+        <div class="param-row">
+          <label>${col}</label>
+          <select id="${col}_op">${ops.map(o=>`<option>${o}</option>`).join('')}</select>
+          <input type="number" id="${col}_val" step="0.01" placeholder="value">
+          <input type="checkbox" id="${col}_chk">
+        </div>
+      `).join('');
+    }
+
+    function generateAlgo(){
+      const chosen=[];
+      columns.forEach(p=>{
+        if(document.getElementById(`${p}_chk`).checked){
+          const op=document.getElementById(`${p}_op`).value;
+          const val=document.getElementById(`${p}_val`).value;
+          chosen.push(`${p} ${op} ${val}`);
+        }
+      });
+      const sentence = chosen.join(' + ');
+      document.getElementById('algoBox').textContent = sentence;
+    }
+
+    async function saveStrategy(){
+      const conds=[];
+      columns.forEach(p=>{
+        if(document.getElementById(`${p}_chk`).checked){
+          conds.push({
+            param:p,
+            operator:document.getElementById(`${p}_op`).value,
+            value:parseFloat(document.getElementById(`${p}_val`).value)
+          });
+        }
+      });
+      const symbols=[...document.getElementById('symbols').selectedOptions].map(o=>o.value);
+      const exchange=document.getElementById('exchange').value;
+      strategy={ exchange, symbols, conditions:conds };
+      await fetch('/strategy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(strategy)});
+      alert('Strategy saved.');
+    }
+
+    async function runBacktest(){
+      document.getElementById('output').textContent='Running...';
+      const res=await fetch('/backtest',{method:'POST'});
+      const json=await res.json();
+      const {stats,trades}=json;
+      const summary=`Total: ${stats.total}\nWinrate: ${stats.winRate}%\nTP1: ${stats.tp1}\nTP2: ${stats.tp2}\nLoss: ${stats.loss}`;
+      const top=trades.slice(0,10).map(t=>`${t.symbol} → ${t.outcome}`).join('\n');
+      document.getElementById('output').textContent=summary+'\n\nTop 10:\n'+top;
+    }
+
+    async function getSuggestions(){
+      document.getElementById('output').textContent='🤖 Generating suggestions...';
+      const res=await fetch('/suggest',{method:'POST'});
+      const data=await res.json();
+      document.getElementById('algoBox').textContent=JSON.stringify(data.suggestions,null,2);
+    }
+
+    init();
+  </script>
+</body>
+</html>

@@ -1,4 +1,6 @@
 # Perpetual Futures Data System - Technical Architecture
+a mini cross-exchange analytics warehouse specialized for perpetual futures scalping/backtesting.
+a Domain-Specific Language (DSL) 
 
 ## System Overview
 PostgreSQL 17.6 + TimescaleDB 2.22.0 perpetual futures analytics database with pre-calculated rolling metrics for high-speed backtesting. Data retention: **10 days** (auto-pruned via TimescaleDB retention policies).

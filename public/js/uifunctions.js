@@ -1,115 +1,220 @@
-/**
- * UI Utility Functions for FadeMoe4 frontend.
- * Includes status updates, error display, table rendering, pagination,
- * and HTML escaping to prevent XSS.
- */
+// public/js/uifunctions.js
+// ============================================================================
+// UI Utility Functions
+// Handles rendering data, managing UI elements, and utility tasks.
+// ============================================================================
 
 /**
- * Update status bar message with current time.
- * @param {string} message
+ * Escapes HTML special characters to prevent XSS attacks.
+ * @param {string} str - The string to escape.
+ * @returns {string} The escaped string.
  */
-function updateStatus(message) {
-    const statusBar = document.getElementById('statusBar');
-    if (statusBar) {
-        statusBar.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
-    }
+function escapeHtml(str) {
+    if (typeof str !== 'string') return str;
+    return str.replace(/[&<>"']/g, function(match) {
+        return {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }[match];
+    });
 }
 
 /**
- * Display an error message in the main table area.
- * @param {string} message
+ * Formats a Unix timestamp (milliseconds) into human-readable UTC string.
+ * Example output: "2025-10-19 13:34:00 UTC"
+ * @param {number} timestamp - Unix timestamp in milliseconds.
+ * @returns {string} Formatted date string or 'Invalid Date' if invalid.
  */
-function showError(message) {
-    const tableContent = document.getElementById('tableContent');
-    if (tableContent) {
-        tableContent.innerHTML = `<div class="error">❌ ${message}</div>`;
-        updateStatus(`Error: ${message}`);
+function formatTimestampUTC(timestamp) {
+    if (timestamp == null || timestamp === '') return '';
+    
+    try {
+        // Ensure it's a number
+        let numericTimestamp = Number(timestamp);
+        
+        if (isNaN(numericTimestamp)) return 'Invalid Date';
+
+        const date = new Date(numericTimestamp);
+        if (isNaN(date.getTime())) return 'Invalid Date';
+
+        // Format: "2025-10-19 13:34:00 UTC"
+        return date.toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+    } catch {
+        return 'Invalid Date';
     }
+}
+//==============================================================
+/**
+ * Formats a number string to keep only meaningful decimals.
+ * Rules:
+ * - Leave one zero if all decimals are zeros (e.g. 3.000 → 3.0)
+ * - Trim trailing zeros if any non-zero digit exists after decimal
+ * - Preserve leading zeros for small decimals (e.g. 0.00032)
+ */
+function smartTrimDecimal(value) {
+    if (value == null || value === '') return '';
+    const num = Number(value);
+    if (isNaN(num)) return value.toString();
+
+    // Convert to string with full precision but prevent scientific notation
+    let str = num.toString();
+
+    // If there is no decimal point, return as-is
+    if (!str.includes('.')) return str;
+
+    const [intPart, decPart] = str.split('.');
+
+    // If all decimal digits are zeros -> keep only one zero
+    if (/^0+$/.test(decPart)) {
+        return `${intPart}.0`;
+    }
+
+    // Otherwise trim only the trailing zeros after the last non-zero
+    const trimmed = decPart.replace(/0+$/, '');
+    return `${intPart}.${trimmed}`;
 }
 
 /**
- * Render data as an HTML table.
- * @param {Array} data - Array of data objects.
- * @param {Array|null} fields - Optional array of fields to display.
+ * Displays data in a table.
+ * @param {Array<Object>} data - Array of data objects.
+ * @param {Array<string>} columns - Columns to display.
  */
-function displayTableData(data, fields = null) {
-    const tableContent = document.getElementById('tableContent');
+function displayTableData(data, columns) {
+    const tableHeaderRow = document.getElementById('table-header-row');
+    const tableBody = document.getElementById('table-body');
+    const tableMessage = document.getElementById('table-message');
 
-    if (!data || data.length === 0) {
-        tableContent.innerHTML = '<div class="loading">No data found</div>';
+    if (!tableHeaderRow || !tableBody || !tableMessage) {
+        console.error('Table elements not found');
         return;
     }
 
-    const columns = fields ? fields : Object.keys(data[0]);
+    if (!data || data.length === 0) {
+        tableHeaderRow.innerHTML = '';
+        tableBody.innerHTML = '';
+        tableMessage.textContent = 'No data found';
+        return;
+    }
 
-    let html = '<table><thead><tr>';
+    tableMessage.textContent = '';
+
+    // Build header
+    tableHeaderRow.innerHTML = '';
     columns.forEach(col => {
-        html += `<th style="color: #b569ff;">${col}</th>`;
+        let headerText = col.charAt(0).toUpperCase() + col.slice(1);
+        if (col === 'exchange') headerText = 'Exch';
+        const th = document.createElement('th');
+        th.textContent = headerText;
+        tableHeaderRow.appendChild(th);
     });
-    html += '</tr></thead><tbody>';
 
+    // Build body
+    tableBody.innerHTML = '';
     data.forEach(row => {
-        html += '<tr>';
+        const tr = document.createElement('tr');
         columns.forEach(col => {
-            let value = row[col];
-
-            if (value === null || value === undefined) {
-                value = '<em>null</em>';
-            } else if (col === 'ts' && typeof value === 'string' && value.includes('T')) {
-                value = new Date(value).toLocaleString();
-            } else if (typeof value === 'object' && value !== null) {
-                value = `<span class="json-cell" title="${escapeHtml(JSON.stringify(value, null, 2))}">${escapeHtml(JSON.stringify(value))}</span>`;
-            } else if (typeof value === 'string' && value.length > 50) {
-                value = `<span title="${escapeHtml(value)}">${escapeHtml(value.substring(0, 50))}...</span>`;
+            const td = document.createElement('td');
+            let val = row[col];
+            if (val === null || val === undefined) {
+                td.innerHTML = '<em>null</em>';
+            } else if (col === 'ts') {
+                td.textContent = formatTimestampUTC(val);
+            } else if (typeof val === 'object') {
+                const jsonStr = JSON.stringify(val);
+                td.textContent = jsonStr.length > 50 ? jsonStr.substring(0, 50) + '...' : jsonStr;
+                td.title = jsonStr;
+            } else if (typeof val === 'string' && val.length > 50) {
+                td.textContent = val.substring(0, 50) + '...';
+                td.title = val;
+            } else if (typeof val === 'number' || (!isNaN(val) && val !== '')) {
+                td.textContent = smartTrimDecimal(val);
             } else {
-                value = escapeHtml(String(value));
+                td.textContent = val.toString();
             }
 
-            html += `<td>${value}</td>`;
+            tr.appendChild(td);
         });
-        html += '</tr>';
+        tableBody.appendChild(tr);
+    });
+}
+
+/**
+ * Populates a multi-select dropdown with checkboxes.
+ * @param {string} containerId - ID of the dropdown container div.
+ * @param {Array<string>} items - List of items to populate.
+ * @param {Array<string>} selectedItems - Items to mark as selected.
+ */
+function populateMultiSelect(containerId, items, selectedItems = []) {
+    const container = document.getElementById(containerId);
+    if (!container) {
+        console.error(`Multi-select container ${containerId} not found`);
+        return;
+    }
+    container.innerHTML = '';
+
+    // Add "All" checkbox
+    const allLabel = document.createElement('label');
+    allLabel.className = 'multi-select-label';
+    const allCheckbox = document.createElement('input');
+    allCheckbox.type = 'checkbox';
+    allCheckbox.value = '__all__';
+    allCheckbox.checked = selectedItems.length === 0 || selectedItems.length === items.length;
+    allLabel.appendChild(allCheckbox);
+    allLabel.appendChild(document.createTextNode('All'));
+    container.appendChild(allLabel);
+
+    allCheckbox.addEventListener('change', () => {
+        const checkboxes = container.querySelectorAll('input[type="checkbox"]:not([value="__all__"])');
+        checkboxes.forEach(cb => cb.checked = allCheckbox.checked);
     });
 
-    html += '</tbody></table>';
-    tableContent.innerHTML = html;
+    // Add individual items
+    items.forEach(item => {
+        const label = document.createElement('label');
+        label.className = 'multi-select-label';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = item;
+        checkbox.checked = selectedItems.includes(item);
+        
+        // STOP PROPAGATION to keep dropdown open
+        checkbox.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+        
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(item));
+        container.appendChild(label);
+
+        checkbox.addEventListener('change', () => {
+            if (!checkbox.checked) {
+                allCheckbox.checked = false;
+            } else {
+                const allChecked = Array.from(container.querySelectorAll('input[type="checkbox"]:not([value="__all__"])'))
+                    .every(cb => cb.checked);
+                allCheckbox.checked = allChecked;
+            }
+        });
+    });
 }
 
 /**
- * Update pagination controls based on total records and current page.
- * @param {number} totalRecords
- * @param {number} currentOffset
- * @param {number} currentLimit
+ * Updates pagination controls.
  */
-function updatePagination(totalRecords, currentOffset, currentLimit) {
-    const pagination = document.getElementById('pagination');
-    const pageInfo = document.getElementById('pageInfo');
+function updatePaginationControls(currentPage, totalPages, totalRecords) {
+    const pageInfo = document.getElementById('page-info');
+    const totalPagesDisplay = document.getElementById('total-pages-display');
+    const prevBtn = document.getElementById('prev-page-btn');
+    const nextBtn = document.getElementById('next-page-btn');
+    const pageInput = document.getElementById('page-input');
 
-    if (totalRecords > currentLimit) {
-        pagination.style.display = 'flex';
-        const currentPage = Math.floor(currentOffset / currentLimit) + 1;
-        const totalPages = Math.ceil(totalRecords / currentLimit);
-        pageInfo.textContent = `Page ${currentPage} of ${totalPages} (${totalRecords} total)`;
+    if (pageInfo) pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+    if (totalPagesDisplay) totalPagesDisplay.textContent = `Total Pages: ${totalPages}`;
 
-        const prevBtn = document.getElementById('prev-page-btn');
-        const nextBtn = document.getElementById('next-page-btn');
-        prevBtn.disabled = currentOffset === 0;
-        nextBtn.disabled = currentOffset + currentLimit >= totalRecords;
-    } else {
-        pagination.style.display = 'none';
-    }
-}
-
-/**
- * Escape HTML special characters to prevent XSS attacks.
- * @param {string} unsafe
- * @returns {string}
- */
-function escapeHtml(unsafe) {
-    if (typeof unsafe !== 'string') return unsafe;
-    return unsafe
-         .replace(/&/g, "&amp;")
-         .replace(/</g, "&lt;")
-         .replace(/>/g, "&gt;")
-         .replace(/"/g, "&quot;")
-         .replace(/'/g, "&#039;");
+    if (prevBtn) prevBtn.disabled = currentPage <= 1;
+    if (nextBtn) nextBtn.disabled = currentPage >= totalPages;
+    if (pageInput) pageInput.value = currentPage;
 }

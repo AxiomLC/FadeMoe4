@@ -1,0 +1,53 @@
+[
+  {
+    "name": "Momentum RSI 5m Reversal",
+    "description": "Enter long when rsi1_chg_5m drops below -2% and price change over 5 minutes (c_chg_5m) is positive, indicating a brief pullback in an upward momentum trend. Exit after 10 minutes or if rsi1_chg_5m crosses above 0.",
+    "entry": {
+      "rsi1_chg_5m": "< -2",
+      "c_chg_5m": "> 0"
+    },
+    "exit": {
+      "time_minutes": 10,
+      "rsi1_chg_5m": "> 0"
+    },
+    "tokens": [
+      "HYPE",
+      "SUI",
+      "ASTER"
+    ]
+  },
+  {
+    "name": "Volume Spike Continuation",
+    "description": "Enter long when volume change over 1 minute (v_chg_1m) exceeds 10% and price change over 1 minute (c_chg_1m) is positive, capitalizing on short-term momentum continuation. Exit after 5 minutes or if volume change drops below 5%.",
+    "entry": {
+      "v_chg_1m": "> 10",
+      "c_chg_1m": "> 0"
+    },
+    "exit": {
+      "time_minutes": 5,
+      "v_chg_1m": "< 5"
+    },
+    "tokens": [
+      "SUI",
+      "XPL",
+      "HYPE"
+    ]
+  },
+  {
+    "name": "Liquidity Side Shift Scalping",
+    "description": "Enter long when lqside_chg_1m increases by more than 3%, indicating increasing buy-side liquidity, with stable or increasing rsi60_chg_1m. Exit after 3 minutes or if lqside_chg_1m reverses below 0%.",
+    "entry": {
+      "lqside_chg_1m": "> 3",
+      "rsi60_chg_1m": ">= 0"
+    },
+    "exit": {
+      "time_minutes": 3,
+      "lqside_chg_1m": "< 0"
+    },
+    "tokens": [
+      "ASTER",
+      "BTC",
+      "ETH"
+    ]
+  }
+]

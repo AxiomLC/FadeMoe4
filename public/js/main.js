@@ -1,312 +1,131 @@
-/**
- * Main JavaScript for FadeMoe4 UI.
- * Handles loading UI components, system status, perpspec dropdown,
- * schema display, and view toggling.
- */
+// public/js/main.js
+// ============================================================================
+// Main Application Logic
+// Manages app state, fetches data from API, and updates UI accordingly.
+// ============================================================================
+// ============================================================================
+// Main Application Logic
+// Manages app state, fetches data from API, and updates UI accordingly.
+// ============================================================================
 
-let currentView = 'db';
-let currentPerpspec = '';
-let currentOffset = 0;
-let currentLimit = 100;
-let totalRecords = 0;
+// ✅ Only create appState if it doesn’t already exist
+if (!window.appState) {
+    window.appState = {
+        currentPage: 1,
+        limit: 100,
+        selectedSymbols: [],
+        selectedExchanges: [],
+        visibleColumns: [],
+        totalPages: 1,
+        totalRecords: 0,
+        defaultColumns: ['ts', 'symbol', 'exchange', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lqside', 'lqprice', 'lqqty'],
+        mandatoryColumns: ['ts', 'symbol', 'exchange']
+    };
+}
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadComponents();
-    loadSystemStatus();
-    setInterval(loadSystemStatus, 60000);
-
-    const modal = document.getElementById('schemaModal');
-    const closeBtn = document.getElementById('modalCloseBtn');
-    if (modal && closeBtn) {
-        closeBtn.addEventListener('click', () => {
-            modal.classList.add('hidden');
-        });
-        modal.addEventListener('click', (event) => {
-            if (event.target === modal) {
-                modal.classList.add('hidden');
-            }
-        });
-    }
-
-    loadThreeButtons();
+    initializeUI();
 });
 
 /**
- * Load and update system status box from API.
+ * Initializes the UI by fetching selectors data and system status.
  */
-async function loadSystemStatus() {
-    const statusBox = document.getElementById('statusBox');
-    if (!statusBox) return;
-
+async function initializeUI() {
     try {
-        const response = await fetch('/api/system-summary');
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        const data = await response.json();
-        if (data.statusText) {
-            statusBox.innerHTML = data.statusText;
+        const state = window.appState; // use global shared state
+
+        // Fetch and populate selectors
+        const symbols = await fetchJson('/api/symbols');
+        populateMultiSelect('symbol-dropdown', symbols, state.selectedSymbols);
+
+        const exchanges = await fetchJson('/api/exchanges');
+        populateMultiSelect('exchange-dropdown', exchanges, state.selectedExchanges);
+
+        const params = await fetchJson('/api/params');
+        // ✅ Preserve user column selections if already set
+        const currentColumns = state.visibleColumns.length
+            ? state.visibleColumns
+            : state.defaultColumns;
+        populateMultiSelect('params-dropdown', params, currentColumns);
+
+        // Fetch system status (non-blocking)
+        fetchSystemSummary();
+
+        // Initial data fetch
+        await fetchData();
+    } catch (error) {
+        console.error('Error initializing UI:', error);
+    }
+}
+
+
+/**
+ * Fetches JSON data from given URL with error handling.
+ * @param {string} url
+ * @returns {Promise<any>}
+ */
+async function fetchJson(url) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    return response.json();
+}
+
+/**
+ * Fetches system summary and updates status box.
+ */
+async function fetchSystemSummary() {
+    try {
+        const summary = await fetchJson('/api/system-summary');
+        const statusBox = document.getElementById('system-status-box');
+        if (statusBox && summary.statusText) {
+            statusBox.innerHTML = summary.statusText;
         }
     } catch (error) {
-        console.error('Failed to load system status:', error);
-        if (statusBox) statusBox.innerHTML = '<div class="error">Failed to load system status</div>';
+        console.error('Failed to fetch system summary:', error);
     }
 }
 
 /**
- * Load UI components HTML fragments and initialize event listeners.
+ * Fetches perp_data from API based on current appState and updates table and pagination.
  */
-async function loadComponents() {
+async function fetchData() {
     try {
-        const controlsResponse = await fetch('components/controls.html');
-        const controlsHtml = await controlsResponse.text();
-        document.getElementById('controls-container').innerHTML = controlsHtml;
-        setupEventListeners();
+        const params = new URLSearchParams();
+        params.append('page', window.appState.currentPage);
+        params.append('limit', window.appState.limit);
 
-        const dbviewControlResponse = await fetch('components/dbviewcontrol.html');
-        const dbviewControlHtml = await dbviewControlResponse.text();
-        document.getElementById('dbviewcontrol-container').innerHTML = dbviewControlHtml;
-        initDbviewControlListeners();
-    } catch (error) {
-        console.error('Failed to load controls or dbviewcontrol:', error);
-    }
-    try {
-        const statusResponse = await fetch('components/statusbox.html');
-        const statusHtml = await statusResponse.text();
-        document.getElementById('status-box-container').innerHTML = statusHtml;
-    } catch (error) {
-        console.error('Failed to load status box:', error);
-    }
-    try {
-        const dbViewResponse = await fetch('components/dbview.html');
-        const dbViewHtml = await dbViewResponse.text();
-        document.getElementById('db-view-container').innerHTML = dbViewHtml;
-    } catch (error) {
-        console.error('Failed to load DB view:', error);
-    }
-
-    try {
-        const alertViewResponse = await fetch('components/alertview.html');
-        const alertViewHtml = await alertViewResponse.text();
-        document.getElementById('alert-view-container').innerHTML = alertViewHtml;
-    } catch (error) {
-        console.error('Failed to load Alert view:', error);
-    }
-}
-
-/**
- * Setup event listeners for view toggle buttons.
- */
-function setupEventListeners() {
-    const viewDbBtn = document.getElementById('view-db-btn');
-    const viewAlertsBtn = document.getElementById('view-alerts-btn');
-    if (viewDbBtn && viewAlertsBtn) {
-        viewDbBtn.addEventListener('click', () => switchView('db'));
-        viewAlertsBtn.addEventListener('click', () => switchView('alerts'));
-    }
-}
-
-/**
- * Initialize listeners for DB view controls (dropdown, buttons).
- */
-function initDbviewControlListeners() {
-    const perpspecDropdown = document.getElementById('perpspecDropdown');
-    const selectBtn = document.getElementById('selectPerpspecBtn');
-    const viewSchemaBtn = document.getElementById('viewSchemaBtn');
-
-    if (!perpspecDropdown || !selectBtn || !viewSchemaBtn) {
-        console.warn('DB view control buttons or dropdown not found');
-        return;
-    }
-
-    loadPerpspecsDbviewControl();
-
-    selectBtn.addEventListener('click', () => {
-        const selected = perpspecDropdown.value;
-        if (!selected) {
-            alert('Please select a Perpspec');
-            return;
+        // Send filters only if selected, else omit to fetch all
+        if (window.appState.selectedSymbols.length > 0) {
+            params.append('symbol', window.appState.selectedSymbols.join(','));
         }
-        currentPerpspec = selected;
-        currentOffset = 0;
-        fetchAndDisplayDataDbviewControl(selected);
-    });
-
-    document.getElementById('prevPageBtn').addEventListener('click', () => {
-        if (currentOffset > 0) {
-            currentOffset -= currentLimit;
-            fetchAndDisplayDataDbviewControl(currentPerpspec);
+        if (window.appState.selectedExchanges.length > 0) {
+            params.append('exchange', window.appState.selectedExchanges.join(','));
         }
-    });
+        // Send selected columns or default columns
+        const cols = window.appState.visibleColumns.length ? window.appState.visibleColumns : window.appState.defaultColumns;
+        params.append('params', cols.join(','));
 
-    document.getElementById('nextPageBtn').addEventListener('click', () => {
-        currentOffset += currentLimit;
-        fetchAndDisplayDataDbviewControl(currentPerpspec);
-    });
+        const url = `/api/perp_data?${params.toString()}`;
+        console.log('Fetching data with URL:', url);
 
-    document.getElementById('goToPageBtn').addEventListener('click', async () => {
-        const page = parseInt(document.getElementById('pageInput').value);
-        if (page > 0) {
-            currentOffset = (page - 1) * currentLimit;
-            console.log(`Fetching data for perpspec: ${currentPerpspec} with limit: ${currentLimit} and offset: ${currentOffset}`);
-            await fetchAndDisplayDataDbviewControl(currentPerpspec);
-        }
-    });
-}
+        const result = await fetchJson(url);
+        console.log('Received data:', result);
 
-/**
- * Switch between DB view and Alerts view.
- * @param {string} view - 'db' or 'alerts'
- */
-function switchView(view) {
-    currentView = view;
+        window.appState.totalPages = result.pagination.totalPages;
+        window.appState.totalRecords = result.pagination.totalRecords;
+        window.appState.currentPage = result.pagination.currentPage;
+        window.appState.visibleColumns = result.visibleColumns || window.appState.defaultColumns;
 
-    const viewDbBtn = document.getElementById('view-db-btn');
-    const viewAlertsBtn = document.getElementById('view-alerts-btn');
-    const dbViewContainer = document.getElementById('db-view-container');
-    const alertViewContainer = document.getElementById('alert-view-container');
-
-    if (viewDbBtn && viewAlertsBtn && dbViewContainer && alertViewContainer) {
-        viewDbBtn.classList.toggle('active', view === 'db');
-        viewDbBtn.classList.toggle('glow-purple', view === 'db');
-        viewDbBtn.classList.remove('glow-pink');
-
-        viewAlertsBtn.classList.toggle('active', view === 'alerts');
-        viewAlertsBtn.classList.toggle('glow-pink', view === 'alerts');
-        viewAlertsBtn.classList.remove('glow-purple');
-
-        dbViewContainer.classList.toggle('hidden', view !== 'db');
-        alertViewContainer.classList.toggle('hidden', view !== 'alerts');
-    }
-}
-
-/**
- * Load perpspecs from API and populate dropdown.
- */
-async function loadPerpspecsDbviewControl() {
-    const dropdown = document.getElementById('perpspecDropdown');
-    dropdown.innerHTML = '<option value="">Loading Perpspecs...</option>';
-    try {
-        const response = await fetch('/api/perpspecs');
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        const perpspecs = await response.json();
-        dropdown.innerHTML = '<option value="">Select Perpspec...</option>';
-        perpspecs.forEach(ps => {
-            const option = document.createElement('option');
-            option.value = ps.perpspec_name;
-            option.textContent = ps.perpspec_name.toUpperCase();
-            dropdown.appendChild(option);
-        });
+        displayTableData(result.data, window.appState.visibleColumns);
+        updatePaginationControls(window.appState.currentPage, window.appState.totalPages, window.appState.totalRecords);
     } catch (error) {
-        console.error('Failed to load perpspecs:', error);
-        dropdown.innerHTML = '<option value="">Failed to load Perpspecs</option>';
-    }
-}
-
-/**
- * Fetch and display schema fields for selected perpspec.
- * @param {string} perpspec
- */
-async function fetchAndDisplaySchemaFields(perpspec) {
-    const container = document.getElementById('db-view-container');
-    container.innerHTML = '<div class="loading">Loading schema fields...</div>';
-
-    try {
-        const response = await fetch('/api/perpspecs');
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        const perpspecs = await response.json();
-        const schema = perpspecs.find(ps => ps.perpspec_name === perpspec);
-        if (!schema) throw new Error(`Schema for ${perpspec} not found`);
-
-        const fields = schema.fields;
-        let html = `<h3>Schema Fields for ${perpspec.toUpperCase()}</h3><ul>`;
-        fields.forEach(field => {
-            html += `<li>${field}</li>`;
-        });
-        html += '</ul>';
-
-        container.innerHTML = html;
-    } catch (error) {
-        console.error('Error fetching/displaying schema fields:', error);
-        container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
-    }
-}
-
-/**
- * Fetch and display data for selected perpspec.
- * @param {string} perpspec
- */
-async function fetchAndDisplayDataDbviewControl(perpspec) {
-    const container = document.getElementById('db-view-container');
-    container.innerHTML = '<div class="loading">Loading data...</div>';
-
-    try {
-        const dataResponse = await fetch(`/api/data/${perpspec}?limit=${currentLimit}&offset=${currentOffset}`);
-        if (!dataResponse.ok) throw new Error(`HTTP error! status: ${dataResponse.status}`);
-        const dataResult = await dataResponse.json();
-        const totalRecords = dataResult.total;
-        const totalPages = dataResult.totalPages;
-        const fields = dataResult.fields || [];
-
-        const totalDisplay = document.getElementById('totalRecordsDisplay');
-        if (totalDisplay) {
-            totalDisplay.innerText = `Total Pages: ${totalPages}`;
+        console.error('Failed to fetch data:', error);
+        const tableMessage = document.getElementById('table-message');
+        if (tableMessage) {
+            tableMessage.textContent = `Error loading data: ${error.message}`;
         }
-
-        if (!dataResult.data || dataResult.data.length === 0) {
-            container.innerHTML = '<div class="loading">No data found for selected Perpspec.</div>';
-            return;
-        }
-
-        const coreColumns = ['ts', 'symbol', 'source', 'interval'];
-        const filteredCoreColumns = coreColumns.filter(c => c !== 'perpspec');
-        const allColumns = [...new Set([...filteredCoreColumns, ...fields])];
-
-        let html = '<table><thead><tr>';
-        allColumns.forEach(col => {
-            html += `<th>${col}</th>`;
-        });
-        html += '</tr></thead><tbody>';
-
-        dataResult.data.forEach(row => {
-            html += '<tr>';
-            allColumns.forEach(col => {
-                let val = row[col];
-                if (val === null || val === undefined) val = '<em>null</em>';
-                else if (col === 'ts') val = formatTimestampForUI(val);
-                else val = val.toString();
-                html += `<td>${val}</td>`;
-            });
-            html += '</tr>';
-        });
-
-        html += '</tbody></table>';
-        container.innerHTML = html;
-
-    } catch (error) {
-        console.error('Error fetching/displaying data:', error);
-        container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
     }
 }
 
-/**
- * Placeholder for loading additional UI buttons if needed.
- */
-function loadThreeButtons() {
-    // Implement if needed
-}
-
-/**
- * Format timestamp for display.
- * @param {number|string|bigint} timestamp
- * @returns {string}
- */
-function formatTimestampForUI(ts) {
-    const date = new Date(Number(ts));
-    const day = String(date.getUTCDate()).padStart(2, '0');
-    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-    const year = date.getUTCFullYear();
-    const hours = String(date.getUTCHours()).padStart(2, '0');
-    const minutes = String(date.getUTCMinutes()).padStart(2, '0');
-    const seconds = String(date.getUTCSeconds()).padStart(2, '0');
-    return `${day}/${month}/${year} ${hours}:${minutes}:${seconds} UTC`;
-}
-
+// Expose fetchData globally for controls.js
+window.fetchData = fetchData;

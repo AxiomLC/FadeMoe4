@@ -37,13 +37,44 @@ function normalizeNumeric(value) {
   return isNaN(parsed) ? null : parsed;
 }
 
+// New helper: Merge LSR data across exchanges for a symbol (unified row per ts/symbol/exchange with lsr)
+function mergeLSRData(allExchangeData, symbol) {
+  const merged = new Map();  // Key: `${ts}_${exchange}` (per symbol)
+
+  for (const data of allExchangeData) {
+    const ts = data.ts;
+    const exchange = data.source.split('-')[0];  // e.g., 'bin' from 'bin-lsr'
+    const key = `${ts}_${exchange}`;
+
+    if (!merged.has(key)) {
+      merged.set(key, {
+        ts,
+        symbol,
+        exchange,
+        perpspec: [],  // JSONB array: append full perpspec names
+        lsr: null,
+        notes: null  // Leave empty for future use
+      });
+    }
+
+    const row = merged.get(key);
+    row.lsr = data.lsr;  // Set LSR value (only field for this script)
+    // Append full perpspec name to array if not already present
+    if (!row.perpspec.includes(data.perpspec)) {
+      row.perpspec.push(data.perpspec);  // e.g., 'bin-lsr', 'byb-lsr'
+    }
+  }
+
+  return Array.from(merged.values());
+}
+
 // ============================================================================
 // EXCHANGE CONFIGURATIONS
 // ============================================================================
 
 const EXCHANGES = {
   BINANCE: {
-    perpspec: 'bin-lsr',  // Keep for logging/error purposes
+    perpspec: 'bin-lsr',  // Full name for JSONB array
     url: 'https://fapi.binance.com/futures/data/globalLongShortAccountRatio',
     limit: 500,
     rateDelay: 200,  // 40 req/sec = 25ms delay
@@ -56,7 +87,7 @@ const EXCHANGES = {
     process: processBinanceData
   },
   BYBIT: {
-    perpspec: 'byb-lsr',  // Keep for logging/error purposes
+    perpspec: 'byb-lsr',  // Full name for JSONB array
     url: 'https://api.bybit.com/v5/market/account-ratio',
     limit: 500,
     rateDelay: 100,  // 120 req/sec = ~8ms delay
@@ -69,7 +100,7 @@ const EXCHANGES = {
     process: processBybitData
   },
   OKX: {
-    perpspec: 'okx-lsr',  // Keep for logging/error purposes
+    perpspec: 'okx-lsr',  // Full name for JSONB array
     url: 'https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract',
     limit: 100,
     rateDelay: 300,  // 2.5 req/sec = 400ms delay
@@ -251,7 +282,7 @@ async function fetchOKXLSR(symbol, config, startTs, endTs) {
 
 //=================BINANCE========================================
 function processBinanceData(rawData, baseSymbol, config) {
-  const perpspec = config.perpspec;  // Keep for logging/error purposes
+  const perpspec = config.perpspec;  // Full name for JSONB array
   const result = [];
 
   for (const dataPoint of rawData) {
@@ -266,9 +297,10 @@ function processBinanceData(rawData, baseSymbol, config) {
           result.push({
             ts: apiUtils.toMillis(BigInt(minuteTs)),
             symbol: baseSymbol,
-            perpspec,  // Keep for logging/error purposes
+            source: perpspec,  // Keep for merge logic (dropped from insert)
+            perpspec,  // Full name for JSONB array
             lsr
-            // Dropped: source, interval (no longer in schema)
+            // Dropped: interval (no longer in schema)
           });
         }
       }
@@ -282,7 +314,7 @@ function processBinanceData(rawData, baseSymbol, config) {
 
 //=================BYBIT========================================
 function processBybitData(rawData, baseSymbol, config) {
-  const perpspec = config.perpspec;  // Keep for logging/error purposes
+  const perpspec = config.perpspec;  // Full name for JSONB array
   const result = [];
 
   for (const dataPoint of rawData) {
@@ -301,9 +333,10 @@ function processBybitData(rawData, baseSymbol, config) {
           result.push({
             ts: apiUtils.toMillis(BigInt(minuteTs)),
             symbol: baseSymbol,
-            perpspec,  // Keep for logging/error purposes
+            source: perpspec,  // Keep for merge logic (dropped from insert)
+            perpspec,  // Full name for JSONB array
             lsr
-            // Dropped: source, interval (no longer in schema)
+            // Dropped: interval (no longer in schema)
           });
         }
       }
@@ -317,7 +350,7 @@ function processBybitData(rawData, baseSymbol, config) {
 
 //=================OKX========================================
 function processOKXData(rawData, baseSymbol, config) {
-  const perpspec = config.perpspec;  // Keep for logging/error purposes
+  const perpspec = config.perpspec;  // Full name for JSONB array
   const result = [];
 
   for (const record of rawData) {
@@ -331,9 +364,10 @@ function processOKXData(rawData, baseSymbol, config) {
         result.push({
           ts: apiUtils.toMillis(BigInt(minuteTs)),
           symbol: baseSymbol,
-          perpspec,  // Keep for logging/error purposes
+          source: perpspec,  // Keep for merge logic (dropped from insert)
+          perpspec,  // Full name for JSONB array
           lsr
-          // Dropped: source, interval (no longer in schema)
+          // Dropped: interval (no longer in schema)
         });
       }
     }
@@ -463,7 +497,8 @@ async function backfill() {
 
       // Merge all exchange data for this symbol and insert once (unified per ts/symbol/exchange with lsr)
       if (allExchangeData.length > 0) {
-        await dbManager.insertData(allExchangeData);  // Single call with all LSR data (dbsetup merges to unified rows)
+        const mergedData = mergeLSRData(allExchangeData, baseSym);
+        await dbManager.insertData(mergedData);  // Single call with all LSR data (dbsetup merges to unified rows with DO NOTHING for backfill)
 
         // #5 STATUS: all perpspecs completed (keep legacy, but add symbol complete log)
         if (completedPerpspecs.size === perpspecs.length) {

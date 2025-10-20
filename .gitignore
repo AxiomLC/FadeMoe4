@@ -9,4 +9,7 @@ b-weight.js
 .binance-weight.json
 package-lock.json
 backteser/
+obacktester/
+tests/
+
 

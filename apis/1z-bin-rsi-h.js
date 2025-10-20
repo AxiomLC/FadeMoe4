@@ -1,4 +1,4 @@
-// SCRIPT: rsi-h.js Backfill 7 OCt 2025
+// SCRIPT: bin-rsi-h.js Backfill 7 OCt 2025
 // RSI calculation script for all individual symbols using bin-ohlcv data (no MT)
 // RSI11 for 1m (rsi1) and 60m aggregated (rsi60, forward-filled to 1m ts—60x same per hour)
 // Aggregation uses LAST CLOSE per 60m bucket; ts as BigInt Unix ms
@@ -13,11 +13,11 @@ require('dotenv').config();
 const apiUtils = require('../api-utils'); // For status/error logging
 const dbManager = require('../db/dbsetup'); // Provides dbManager for queries/inserts
 
-const SCRIPT_NAME = '1z-rsi-h.js';
+const SCRIPT_NAME = '1z-bin-rsi-h.js';
 const PERIOD = 11; // RSI period - change this to adjust for all calculations
 const INTERVAL = '1m'; // Fixed 1m interval for all insertions (DB is 1m-based)
 const AGGREGATE_MINUTES = 60; // Aggregation interval for RSI60 in minutes (60m = 1 hour) - can be changed for testing
-const PERPSPEC_SOURCE = 'rsi';
+const PERPSPEC_SOURCE = 'bin-rsi';
 const DATA_PERPSPEC = 'bin-ohlcv';
 const BUCKET_SIZE_MS = AGGREGATE_MINUTES * 60 * 1000; // Milliseconds in aggregation interval
 const HEARTBEAT_INTERVAL = 10000; // 10s heartbeat
