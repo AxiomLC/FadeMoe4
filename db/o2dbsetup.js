@@ -1,6 +1,7 @@
-// db/dbsetup.js 22 Oct 2025
+// db/dbsetup.js 24 Oct 2025
 // ============================================================================
-// DATABASE SETUP & MANAGER
+// DATABASE SETUP & MANAGER  pool max=50 supports parallel without queueing. adds a insertWithRetry helper for 
+// deadlock resilience (retry 3x PG code 40P01 with backoff) optimizes insertBackfillData with 100k-row chunking,
 // Unified upsert: insertData for -c.js (partial DO UPDATE with COALESCE/append perpspec)
 // insertBackfillData for -h.js (partial DO UPDATE with COALESCE; additive for historical fills)
 // ============================================================================
@@ -21,7 +22,7 @@ class DatabaseManager {
       user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
-      max: parseInt(process.env.DB_POOL_MAX) || 10, // Tunable via env
+      max: parseInt(process.env.DB_POOL_MAX) || 50, // Tunable via env
       connectionTimeoutMillis: 5000,
       idleTimeoutMillis: 30000
     });
@@ -122,7 +123,6 @@ class DatabaseManager {
           ts BIGINT NOT NULL,
           symbol TEXT NOT NULL,
           exchange TEXT NOT NULL,
-          window_sizes SMALLINT[] DEFAULT '{1,5,10}',
           o NUMERIC(20,8), h NUMERIC(20,8), l NUMERIC(20,8), c NUMERIC(20,8),
           v NUMERIC(20,8), oi NUMERIC(20,8), pfr NUMERIC(20,8), lsr NUMERIC(20,8),
           rsi1 NUMERIC(10,4), rsi60 NUMERIC(10,4),
@@ -324,6 +324,22 @@ class DatabaseManager {
     }));
   }
 
+  // New: Private helper for deadlock retries (PG code 40P01) on any query
+  async insertWithRetry(query, maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await this.pool.query(query);
+      } catch (error) {
+        if (error.code === '40P01' && attempt < maxRetries) {  // Deadlock
+          console.warn(`Deadlock on query (attempt ${attempt}/${maxRetries}); retrying in ${attempt}s...`);
+          await new Promise(r => setTimeout(r, 1000 * attempt));  // Backoff
+          continue;
+        }
+        throw error;  // Re-throw others
+      }
+    }
+  }
+
   // For -c.js continuous/real-time: Partial update (COALESCE preserves existing; append perpspec)
   // PK fields (ts/symbol/exchange) immutable
   async insertData(allRawData) {
@@ -359,7 +375,7 @@ class DatabaseManager {
       values
     );
 
-    const result = await this.pool.query(query);
+    const result = await this.insertWithRetry(query);
     return result;
   }
 
@@ -392,15 +408,34 @@ class DatabaseManager {
       notes = COALESCE(EXCLUDED.notes, perp_data.notes)
     `;
 
-    const query = format(
-      `INSERT INTO perp_data (${fields.join(', ')})
-       VALUES %L
-       ON CONFLICT (ts, symbol, exchange) DO UPDATE SET ${updateClause}`,
-      values
-    );
+    let totalRowCount = 0;
+    // Insert in chunks of 100k (big loop for high flow; retry per chunk)
+    const chunkSize = 100000;
+    for (let i = 0; i < values.length; i += chunkSize) {
+      const chunk = values.slice(i, i + chunkSize);
+      const chunkQuery = format(
+        `INSERT INTO perp_data (${fields.join(', ')})
+         VALUES %L
+         ON CONFLICT (ts, symbol, exchange) DO UPDATE SET ${updateClause}`,
+        chunk
+      );
+      try {
+        const chunkResult = await this.insertWithRetry(chunkQuery);
+        totalRowCount += chunkResult.rowCount || chunk.length;
+        await new Promise(r => setTimeout(r, 50));  // Tiny pause (reduces burst, no slowdown)
+      } catch (error) {
+        // Per-chunk error catch: Log for perpspec/symbol (no full abort, continue other chunks/symbols)
+        console.error(`Insert failed for chunk [${i}-${i + chunk.length}] (perpspec impact): ${error.message}`);
+        await this.logError('dbsetup', 'DB', 'INSERT_CHUNK_FAIL', `Chunk insert failed: ${error.message}`, {
+          chunkStart: i,
+          chunkSize: chunk.length,
+          errorCode: error.code || 'UNKNOWN'
+        });
+        // Continue to next chunk (doesn't halt script/backfill)
+      }
+    }
 
-    const result = await this.pool.query(query);
-    return result;
+    return { rowCount: totalRowCount };
   }
 
   // insertMetrics: Unchanged (full update for metrics)

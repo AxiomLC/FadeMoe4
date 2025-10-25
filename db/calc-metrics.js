@@ -1,8 +1,8 @@
 // ============================================================================
-// METRICS CALCULATOR  calc-metrics.js  17 Oct 2025 (OPTIMIZED)
+// METRICS CALCULATOR  calc-metrics.js  22 Oct 2025 (UNIFIED SCHEMA)
 // Calculates rolling % changes for all parameters across all exchanges (bin, byb, okx)
 // Runs every 1 minute to keep perp_metrics table fresh for backtester
-// Uses ON CONFLICT DO UPDATE for upserts - no console spam
+// Uses unified queries (by exchange + field presence); ON CONFLICT DO UPDATE for upserts
 // ============================================================================
 
 const dbManager = require('./dbsetup');
@@ -26,6 +26,7 @@ const PARALLEL_SYMBOLS = 8;            // Process 8 symbols concurrently
 
 const EXCHANGES = ['bin', 'byb', 'okx'];
 
+// existing code ...
 // ============================================================================
 // UTILITIES
 // ============================================================================
@@ -45,115 +46,7 @@ function calculatePercentChange(current, previous) {
   return Math.min(Math.max(parseFloat(change.toFixed(4)), -99.9999), 99.9999);
 }
 
-// ============================================================================
-// FETCH AND AGGREGATE DATA BY EXCHANGE
-// ============================================================================
-async function fetchAndAggregateData(symbol, startTs, endTs) {
-  const allPerpspecs = [
-    ...EXCHANGES.map(ex => [`${ex}-ohlcv`, `${ex}-oi`, `${ex}-pfr`, `${ex}-lsr`, `${ex}-tv`, `${ex}-lq`]).flat(),
-    'bin-rsi' //RSI edited 18 Oct to bin-rsi
-  ];
-
-  let allData = [];
-  for (const perpspec of allPerpspecs) {
-    const query = `
-      SELECT ts, symbol, perpspec, o, h, l, c, v, oi, pfr, lsr, 
-             lqside, lqprice, lqqty, rsi1, rsi60, tbv, tsv
-      FROM perp_data
-      WHERE symbol = $1 AND perpspec = $2 AND ts >= $3 AND ts <= $4
-      ORDER BY ts ASC
-    `;
-    try {
-      const result = await dbManager.pool.query(query, [symbol, perpspec, BigInt(startTs), BigInt(endTs)]);
-      allData = allData.concat(result.rows.map(row => ({
-        ts: Number(row.ts),
-        symbol: row.symbol,
-        perpspec: row.perpspec,
-        o: row.o ? parseFloat(row.o) : null,
-        h: row.h ? parseFloat(row.h) : null,
-        l: row.l ? parseFloat(row.l) : null,
-        c: row.c ? parseFloat(row.c) : null,
-        v: row.v ? parseFloat(row.v) : null,
-        oi: row.oi ? parseFloat(row.oi) : null,
-        pfr: row.pfr ? parseFloat(row.pfr) : null,
-        lsr: row.lsr ? parseFloat(row.lsr) : null,
-        lqside: row.lqside || null,
-        lqprice: row.lqprice ? parseFloat(row.lqprice) : null,
-        lqqty: row.lqqty ? parseFloat(row.lqqty) : null,
-        rsi1: row.rsi1 ? parseFloat(row.rsi1) : null,
-        rsi60: row.rsi60 ? parseFloat(row.rsi60) : null,
-        tbv: row.tbv ? parseFloat(row.tbv) : null,
-        tsv: row.tsv ? parseFloat(row.tsv) : null
-      })));
-    } catch (error) {
-      console.error(`Error fetching ${perpspec} for ${symbol}:`, error.message);
-    }
-  }
-
-  if (allData.length === 0) return { bin: [], byb: [], okx: [] };
-
-  // Group by ts and exchange
-  const grouped = { bin: {}, byb: {}, okx: {} };
-  
-  allData.forEach(row => {
-    const ts = row.ts;
-    const exchange = getExchangeFromPerpspec(row.perpspec);
-
-    // Initialize all exchange rows for this ts
-    if (!grouped.bin[ts]) grouped.bin[ts] = { ts, symbol: row.symbol, exchange: 'bin', ...defaultFields() };
-    if (!grouped.byb[ts]) grouped.byb[ts] = { ts, symbol: row.symbol, exchange: 'byb', ...defaultFields() };
-    if (!grouped.okx[ts]) grouped.okx[ts] = { ts, symbol: row.symbol, exchange: 'okx', ...defaultFields() };
-
-    // Merge fields
-    if (exchange) {
-      const targetRow = grouped[exchange][ts];
-      if (row.perpspec.includes('-ohlcv')) { 
-        targetRow.o = row.o; targetRow.h = row.h; targetRow.l = row.l; 
-        targetRow.c = row.c; targetRow.v = row.v; 
-      }
-      if (row.perpspec.includes('-oi')) targetRow.oi = row.oi;
-      if (row.perpspec.includes('-pfr')) targetRow.pfr = row.pfr;
-      if (row.perpspec.includes('-lsr')) targetRow.lsr = row.lsr;
-      if (row.perpspec.includes('-tv')) { targetRow.tbv = row.tbv; targetRow.tsv = row.tsv; }
-      if (row.perpspec.includes('-lq')) { 
-        targetRow.lqside = row.lqside; targetRow.lqprice = row.lqprice; targetRow.lqqty = row.lqqty; 
-      }
-    }
-    
-    // Add RSI to all exchanges
-    if (row.perpspec === 'bin-rsi') {  //edited 18 Oct for bin-rsi
-      grouped.bin[ts].rsi1 = row.rsi1; grouped.bin[ts].rsi60 = row.rsi60;
-      grouped.byb[ts].rsi1 = row.rsi1; grouped.byb[ts].rsi60 = row.rsi60;
-      grouped.okx[ts].rsi1 = row.rsi1; grouped.okx[ts].rsi60 = row.rsi60;
-    }
-  });
-
-  return {
-    bin: Object.values(grouped.bin).sort((a, b) => a.ts - b.ts),
-    byb: Object.values(grouped.byb).sort((a, b) => a.ts - b.ts),
-    okx: Object.values(grouped.okx).sort((a, b) => a.ts - b.ts)
-  };
-}
-
-function getExchangeFromPerpspec(perpspec) {
-  if (perpspec.startsWith('bin-')) return 'bin';
-  if (perpspec.startsWith('byb-')) return 'byb';
-  if (perpspec.startsWith('okx-')) return 'okx';
-  return null;
-}
-
-function defaultFields() {
-  return {
-    o: null, h: null, l: null, c: null, v: null, oi: null, pfr: null, lsr: null,
-    lqside: null, lqprice: null, lqqty: null, rsi1: null, rsi60: null, tbv: null, tsv: null
-  };
-}
-
-// ============================================================================
-// CALCULATE METRICS FOR AN EXCHANGE DATASET
-// ============================================================================
-
-// ==========18 Oct +++Helper: Get majority lqside over a window (count + qty-weighted tie-breaker)
+// Helper: Get majority lqside over a window (count + qty-weighted tie-breaker)
 function getWindowMajoritySide(windowData) {
   if (!windowData || windowData.length === 0) return null;
 
@@ -179,9 +72,119 @@ function getWindowMajoritySide(windowData) {
 
   return null; // True tie, no clear majority
 }
-//=======================================================
 
+// ============================================================================
+// GRACEFUL SHUTDOWN (Top-Level - Add Once on Module Load)
+// ============================================================================
+let runInterval = null;  // Global for clear
 
+async function gracefulShutdown(signal) {
+  console.log(`\n⚠️  Received ${signal}, shutting down gracefully...`);
+  if (runInterval) clearInterval(runInterval);
+  await logStatus('stopped', `${SCRIPT_NAME} stopped by ${signal}.`);
+  await dbManager.close();
+  process.exit(0);
+}
+
+// Add listeners once at module level (outside functions; guard against duplicates)
+if (!process.listeners('SIGINT').length) {
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+}
+
+// ============================================================================
+// FETCH AND AGGREGATE DATA BY EXCHANGE (UNIFIED SCHEMA)
+// ============================================================================
+async function fetchAndAggregateData(symbol, startTs, endTs) {
+  let allData = [];
+
+  // Single query per exchange (unified: filter by exchange + field presence)
+  for (const exchange of EXCHANGES) {
+    // Base query for all fields in range
+    const baseQuery = `
+      SELECT ts, symbol, exchange, o, h, l, c, v, oi, pfr, lsr, 
+             lqside, lqprice, lqqty, rsi1, rsi60, tbv, tsv
+      FROM perp_data
+      WHERE symbol = $1 AND exchange = $2 AND ts >= $3 AND ts <= $4
+      ORDER BY ts ASC
+    `;
+    try {
+      const result = await dbManager.query(baseQuery, [symbol, exchange, BigInt(startTs), BigInt(endTs)]);
+      allData = allData.concat(result.rows.map(row => ({
+        ts: Number(row.ts),
+        symbol: row.symbol,
+        exchange: row.exchange,
+        o: row.o ? parseFloat(row.o) : null,
+        h: row.h ? parseFloat(row.h) : null,
+        l: row.l ? parseFloat(row.l) : null,
+        c: row.c ? parseFloat(row.c) : null,
+        v: row.v ? parseFloat(row.v) : null,
+        oi: row.oi ? parseFloat(row.oi) : null,
+        pfr: row.pfr ? parseFloat(row.pfr) : null,
+        lsr: row.lsr ? parseFloat(row.lsr) : null,
+        lqside: row.lqside || null,
+        lqprice: row.lqprice ? parseFloat(row.lqprice) : null,
+        lqqty: row.lqqty ? parseFloat(row.lqqty) : null,
+        rsi1: row.rsi1 ? parseFloat(row.rsi1) : null,
+        rsi60: row.rsi60 ? parseFloat(row.rsi60) : null,
+        tbv: row.tbv ? parseFloat(row.tbv) : null,
+        tsv: row.tsv ? parseFloat(row.tsv) : null
+      })));
+    } catch (error) {
+      console.error(`Error fetching data for ${exchange} ${symbol}:`, error.message);
+    }
+  }
+
+  if (allData.length === 0) return { bin: [], byb: [], okx: [] };
+
+  // Group by ts and exchange; merge fields (unified: check field presence)
+  const grouped = { bin: {}, byb: {}, okx: {} };
+  
+  allData.forEach(row => {
+    const ts = row.ts;
+    const exchange = row.exchange;
+
+    // Initialize row for this ts/exchange
+    if (!grouped[exchange][ts]) {
+      grouped[exchange][ts] = { 
+        ts, symbol: row.symbol, exchange,
+        o: null, h: null, l: null, c: null, v: null,
+        oi: null, pfr: null, lsr: null,
+        rsi1: null, rsi60: null,
+        tbv: null, tsv: null,
+        lqside: null, lqprice: null, lqqty: null
+      };
+    }
+
+    const targetRow = grouped[exchange][ts];
+
+    // Merge based on field presence (unified schema)
+    if (row.o !== null) { // OHLCV
+      targetRow.o = row.o; targetRow.h = row.h; targetRow.l = row.l; 
+      targetRow.c = row.c; targetRow.v = row.v; 
+    }
+    if (row.oi !== null) targetRow.oi = row.oi;
+    if (row.pfr !== null) targetRow.pfr = row.pfr;
+    if (row.lsr !== null) targetRow.lsr = row.lsr;
+    if (row.rsi1 !== null) { // RSI (bin-only, but applied here if present)
+      targetRow.rsi1 = row.rsi1; targetRow.rsi60 = row.rsi60;
+    }
+    if (row.tbv !== null) { targetRow.tbv = row.tbv; targetRow.tsv = row.tsv; }
+    if (row.lqside !== null) { 
+      targetRow.lqside = row.lqside; targetRow.lqprice = row.lqprice; targetRow.lqqty = row.lqqty; 
+    }
+  });
+
+  return {
+    bin: Object.values(grouped.bin).sort((a, b) => a.ts - b.ts),
+    byb: Object.values(grouped.byb).sort((a, b) => a.ts - b.ts),
+    okx: Object.values(grouped.okx).sort((a, b) => a.ts - b.ts)
+  };
+}
+
+// ============================================================================
+// CALCULATE METRICS FOR AN EXCHANGE DATASET
+// ============================================================================
 function calculateMetricsForExchange(data) {
   if (data.length === 0) return [];
 
@@ -194,11 +197,11 @@ function calculateMetricsForExchange(data) {
       ts: BigInt(current.ts),
       symbol: current.symbol,
       exchange: current.exchange,
-      window_sizes: WINDOW_SIZES,
       o: current.o, h: current.h, l: current.l, c: current.c, v: current.v,
       oi: current.oi, pfr: current.pfr, lsr: current.lsr,
+      rsi1: current.rsi1, rsi60: current.rsi60,
+      tbv: current.tbv, tsv: current.tsv,
       lqside: current.lqside, lqprice: current.lqprice, lqqty: current.lqqty,
-      rsi1: current.rsi1, rsi60: current.rsi60, tbv: current.tbv, tsv: current.tsv,
       // 1m changes
       c_chg_1m: null, v_chg_1m: null, oi_chg_1m: null, pfr_chg_1m: null, lsr_chg_1m: null,
       rsi1_chg_1m: null, rsi60_chg_1m: null, tbv_chg_1m: null, tsv_chg_1m: null,
@@ -245,7 +248,7 @@ function calculateMetricsForExchange(data) {
       metricRow.lqside_chg_5m = (current.lqside !== prev.lqside) ? current.lqside : null;
       metricRow.lqprice_chg_5m = calculatePercentChange(current.lqprice, prev.lqprice);
       metricRow.lqqty_chg_5m = calculatePercentChange(current.lqqty, prev.lqqty);
-      // NEW: Window majority for lqside_chg_5m (over last 5 rows, including current)
+      // Window majority for lqside_chg_5m (over last 5 rows, including current)
       const window5 = data.slice(Math.max(0, i - 4), i + 1);
       metricRow.lqside_chg_5m = getWindowMajoritySide(window5);
     }
@@ -265,7 +268,7 @@ function calculateMetricsForExchange(data) {
       metricRow.lqside_chg_10m = (current.lqside !== prev.lqside) ? current.lqside : null;
       metricRow.lqprice_chg_10m = calculatePercentChange(current.lqprice, prev.lqprice);
       metricRow.lqqty_chg_10m = calculatePercentChange(current.lqqty, prev.lqqty);
-      // NEW: Window majority for lqside_chg_10m (over last 10 rows, including current)
+      // Window majority for lqside_chg_10m (over last 10 rows, including current)
       const window10 = data.slice(Math.max(0, i - 9), i + 1);
       metricRow.lqside_chg_10m = getWindowMajoritySide(window10);
     }
@@ -283,8 +286,7 @@ async function processSymbol(symbol, startTs, endTs) {
   try {
     const aggregatedData = await fetchAndAggregateData(symbol, startTs, endTs);
     let metricsInserted = 0;
-
-     let allExchangeMetrics = [];  // Collect metrics from all exchanges for this symbol
+    let allExchangeMetrics = [];  // Collect metrics from all exchanges for this symbol
 
     for (const exchange of EXCHANGES) {
       const data = aggregatedData[exchange];
@@ -293,16 +295,16 @@ async function processSymbol(symbol, startTs, endTs) {
       const metrics = calculateMetricsForExchange(data);
       if (metrics.length > 0) {
         allExchangeMetrics = allExchangeMetrics.concat(metrics);  // Collect per-exchange metrics
-        metricsInserted += metrics.length;  // Update count without insert
+        metricsInserted += metrics.length;  // Update count
       }
     }
 
-    return { success: true, metricsInserted, symbol };
+    return { success: true, metrics: allExchangeMetrics, metricsInserted, symbol };
   } catch (error) {
     console.error(`❌ Error processing ${symbol}:`, error.message);
     await dbManager.logError(SCRIPT_NAME, 'calculation_error', 'CALC_SYMBOL_FAIL', 
       error.message, { symbol, error: error.stack });
-    return { success: false, metricsInserted: 0, symbol };
+    return { success: false, metrics: [], metricsInserted: 0, symbol };
   }
 }
 
@@ -321,40 +323,39 @@ async function calculateAllMetrics() {
     let successCount = 0;
     let errorCount = 0;
 
-    // ========================================================
     // Parallel processing with p-limit
     const limit = pLimit(PARALLEL_SYMBOLS);
     const tasks = perpList.map(symbol => 
       limit(async () => {
         const result = await processSymbol(symbol, startTs, endTs);
-        return result;  // Now returns metrics too
+        return result;
       })
     );
 
     const results = await Promise.all(tasks);
 
-    // New: Collect all metrics globally
+    // Collect all metrics globally
     let allMetrics = [];
     results.forEach(result => {
       if (result.success) {
         successCount++;
         totalMetricsCalculated += result.metricsInserted;
         if (result.metrics && result.metrics.length > 0) {
-          allMetrics = allMetrics.concat(result.metrics);  // Collect from all symbols/exchanges
+          allMetrics = allMetrics.concat(result.metrics);
         }
       } else {
         errorCount++;
       }
     });
 
-    // New: Sort the collected metrics globally (ts asc, symbol asc, exchange asc)
+    // Sort the collected metrics globally (ts asc, symbol asc, exchange asc)
     allMetrics.sort((a, b) => {
       if (a.ts !== b.ts) return Number(a.ts) - Number(b.ts);  // ts ascending (BigInt to Number)
       if (a.symbol !== b.symbol) return a.symbol.localeCompare(b.symbol);  // symbol ascending
       return a.exchange.localeCompare(b.exchange);  // exchange ascending
     });
 
-    // New: Single insert for all sorted metrics (assumes dbManager.insertMetrics accepts a full array)
+    // Single insert for all sorted metrics
     if (allMetrics.length > 0) {
       const globalInsertResult = await dbManager.insertMetrics(allMetrics);
       totalMetricsCalculated = globalInsertResult.rowCount || allMetrics.length;  // Update total from global insert
@@ -382,8 +383,7 @@ async function calculateAllMetrics() {
 }
 
 // ============================================================================
-// CONTINUOUS RUN MODE
-// Runs backfill once, then continuous 1-minute calculations
+// CONTINUOUS RUN MODE (Updated - Remove Duplicate Listeners)
 // ============================================================================
 async function runContinuously() {
   console.log(`\n🔄 Starting ${SCRIPT_NAME} in continuous mode...`);
@@ -397,15 +397,16 @@ async function runContinuously() {
     await backfiller.runBackfill();
     console.log('\n✅ Backfill complete - starting real-time metrics...\n');
   } catch (error) {
-    console.error('💥 Backfill failed:', error);
+    const summary = `Backfill failed: ${error.code} - ${error.message} (line ${error.position || 'unknown'})`;
+    console.error('💥', summary);  // Short summary
     await dbManager.logError(SCRIPT_NAME, 'backfill_error', 'BACKFILL_FAIL', 
-      error.message, { error: error.stack });
+      summary, { code: error.code, position: error.position });  // Log details
   }
 
   await logStatus('running', `${SCRIPT_NAME} continuous mode started.`);
 
   // Run calculation every minute
-  const runInterval = setInterval(async () => {
+  runInterval = setInterval(async () => {
     try {
       await calculateAllMetrics();
     } catch (error) {
@@ -413,23 +414,12 @@ async function runContinuously() {
     }
   }, CALCULATION_INTERVAL_MS);
 
-  // Graceful cleanup
+  // Graceful cleanup (moved listeners to top-level)
   const cleanup = (signal) => {
     clearInterval(runInterval);
     gracefulShutdown(signal);
   };
-
-  process.on('SIGTERM', () => cleanup('SIGTERM'));
-  process.on('SIGINT', () => cleanup('SIGINT'));
-}
-
-// ============================================================================
-// GRACEFUL SHUTDOWN
-// ============================================================================
-async function gracefulShutdown(signal) {
-  console.log(`\n⚠️  Received ${signal}, shutting down gracefully...`);
-  await logStatus('stopped', `${SCRIPT_NAME} stopped by ${signal}.`);
-  process.exit(0);
+  // Remove old process.on calls from here - already at top-level
 }
 
 // ============================================================================

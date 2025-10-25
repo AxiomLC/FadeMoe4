@@ -1,10 +1,10 @@
 /* ==========================================
- * all-lsr-c.js   14 Oct 2025
- * Continuous Long/Short Ratio Polling Script
+ * all-lsr-c.js   22 Oct 2025 - Unified Schema
+ * Revised Continuous Long/Short Ratio Polling Script
  *
- * Fetches LSR data from Binance, Bybit, and OKX
- * Inserts 1m record immediately at current 1m boundary, caches 4 for 1m upserts
- * Logs high-level status messages for UI and monitoring
+ * Applies unified insertData method per READEMEperpdata.md
+ * Maintains existing functions and logic (A-D, cache offsets)
+ * Unified: insertData (partial DO UPDATE); no source/interval; explicit exchange
  * ========================================== */
 
 const axios = require('axios');
@@ -30,6 +30,7 @@ let errorCount = 0; // Reset per heartbeat
 const EXCHANGE_CONFIG = {
   BINANCE: {
     PERPSPEC: 'bin-lsr',
+    DB_EXCHANGE: 'bin',
     URL: 'https://fapi.binance.com/futures/data/globalLongShortAccountRatio',
     DB_INTERVAL: '1m',
     API_INTERVAL: '5m',
@@ -37,13 +38,18 @@ const EXCHANGE_CONFIG = {
   },
   BYBIT: {
     PERPSPEC: 'byb-lsr',
+    DB_EXCHANGE: 'byb',
     URL: 'https://api.bybit.com/v5/market/account-ratio',
     DB_INTERVAL: '1m',
     API_INTERVAL: '5min',
-    mapSymbol: sym => `${sym}USDT`
+    mapSymbol: sym => {  // Added: Handle meme coins like in 1z-web-ohlcv-c.js (prevents fetch failures)
+      const memeCoins = ['BONK', 'PEPE', 'FLOKI', 'TOSHI'];
+      return memeCoins.includes(sym) ? `1000${sym}USDT` : `${sym}USDT`;
+    }
   },
   OKX: {
     PERPSPEC: 'okx-lsr',
+    DB_EXCHANGE: 'okx',
     URL: 'https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract',
     DB_INTERVAL: '1m',
     API_INTERVAL: '5m',
@@ -66,7 +72,6 @@ async function pollLSR(baseSymbol, config) {
   const perpspec = config.PERPSPEC;
   const key = `${perpspec}:${baseSymbol}`;
   const exchangeSymbol = config.mapSymbol(baseSymbol);
-  const exchangeName = perpspec.split('-')[0];
   const now = Date.now();
 
   try {
@@ -85,7 +90,7 @@ async function pollLSR(baseSymbol, config) {
     }
 
     // Log #2: First successful response for perpspec
-    if (!connectedPerpspecs.has(perpspec)) {
+    if (!connectedPerpspecs.has(perpspec) && rawData) {
       connectedPerpspecs.add(perpspec);
       if (connectedPerpspecs.size === PERPSPECS.length) {
         const message = `🍾 ${PERPSPECS.join(', ')} connected; fetching.`;
@@ -103,11 +108,15 @@ async function pollLSR(baseSymbol, config) {
         lsr = parseFloat(binPoint.longShortRatio);
         break;
       case 'byb-lsr':
-        const bybPoint = rawData.list[0];
+        const bybPoint = rawData.list[0];  // Fixed: rawData is .result
         if (!bybPoint) throw new Error(`No data for ${baseSymbol}`);
         const buyRatio = parseFloat(bybPoint.buyRatio);
         const sellRatio = parseFloat(bybPoint.sellRatio);
-        if (isNaN(buyRatio) || sellRatio === 0) throw new Error(`Invalid ratio for ${baseSymbol}`);
+        if (isNaN(buyRatio) || sellRatio <= 0) {  // Added: Validate sellRatio > 0
+          console.warn(`[byb-lsr] Invalid ratios for ${baseSymbol} (buy=${buyRatio}, sell=${sellRatio}); skipping.`);
+          setTimeout(() => pollLSR(baseSymbol, config), RETRY_INTERVAL);
+          return;
+        }
         lsr = buyRatio / sellRatio;
         break;
       case 'okx-lsr':
@@ -116,10 +125,14 @@ async function pollLSR(baseSymbol, config) {
         lsr = parseFloat(okxPoint[1]);
         break;
     }
-    if (isNaN(lsr)) throw new Error(`Invalid LSR for ${baseSymbol}`);
+    if (isNaN(lsr) || lsr <= 0) {  // Added: Validate lsr
+      console.warn(`[${perpspec}] Invalid LSR (${lsr}) for ${baseSymbol}; skipping.`);
+      setTimeout(() => pollLSR(baseSymbol, config), RETRY_INTERVAL);
+      return;
+    }
 
-    // Use current 1min boundary for first record
-    const timestamp = Math.floor(now / (60*1000)) * (60*1000);
+    // Use current 1min boundary for first record (standardized flooring)
+    const timestamp = Math.floor(now / 60000) * 60000;
 
     const data = symbolData.get(key) || {lastTs: 0, cache: null, fiveMTime: DEFAULT_5M_TIME};
     if (timestamp <= data.lastTs) {
@@ -134,13 +147,12 @@ async function pollLSR(baseSymbol, config) {
     data.cache = {lsr, offsets: [60*1000, 120*1000, 180*1000, 240*1000]}; // Cache at +1min to +4min
     symbolData.set(key, data);
 
-    // Upsert first 1m
-    await dbManager.insertData(perpspec, [{
+    // Upsert first 1m using unified insertData (only lsr set; preserves OHLCV/etc. via COALESCE)
+    await dbManager.insertData([{
       ts: apiUtils.toMillis(BigInt(timestamp)),
       symbol: baseSymbol,
-      source: perpspec,
-      perpspec,
-      interval: config.DB_INTERVAL,
+      exchange: config.DB_EXCHANGE,
+      perpspec, // String; insertData wraps to array & appends uniquely
       lsr
     }]);
 
@@ -161,7 +173,7 @@ async function pollLSR(baseSymbol, config) {
     errorCount++;
     console.error(`[${perpspec}] Error polling ${baseSymbol}:`, error.message);
     await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'API', 'POLL_ERROR', error.message, {
-      exchange: exchangeName,
+      exchange: config.DB_EXCHANGE,  // Fixed: Use config.DB_EXCHANGE
       symbol: baseSymbol,
       perpspec
     });
@@ -176,7 +188,7 @@ async function pollLSR(baseSymbol, config) {
 async function fetchBinanceLSR(symbol, config) {
   const params = { symbol, period: config.API_INTERVAL, limit: 1 };
   const response = await axios.get(config.URL, { params, timeout: 5000 });
-  if (response.data.length === 0) throw new Error(`No data for ${symbol}`);
+  if (!response.data || response.data.length === 0) throw new Error(`No data for ${symbol}`);  // Added: Validate
   return response.data;
 }
 
@@ -184,14 +196,14 @@ async function fetchBybitLSR(symbol, config) {
   const params = { category: 'linear', symbol, period: config.API_INTERVAL, limit: 1 };
   const response = await axios.get(config.URL, { params, timeout: 5000 });
   if (!response.data.result?.list.length) throw new Error(`No data for ${symbol}`);
-  return response.data.result;
+  return response.data.result;  // Return .result
 }
 
-async function fetchOkxLSR(instId, config) {
+async function fetchOkxLSR(instId, config) {  // Param: instId for OKX
   const params = { instId, period: config.API_INTERVAL, limit: 1 };
   const response = await axios.get(config.URL, { params, timeout: 5000 });
   if (response.data.code !== '0' || !response.data.data.length) throw new Error(`No data for ${instId}`);
-  return response.data.data;
+  return response.data.data;  // Return .data
 }
 
 /* ==========================================
@@ -209,15 +221,24 @@ async function pollAllSymbols() {
     const [perpspec, baseSymbol] = key.split(':');
     const nextTs = lastTs + c.offsets[0];
     if (Date.now() >= nextTs) {
+      let config = null;  // Fixed: Declare config outside try (avoids undeclared var if error before assignment)
       try {
-        const exchange = Object.values(EXCHANGE_CONFIG).find(config => config.PERPSPEC === perpspec);
-        if (!exchange) throw new Error(`No config for ${perpspec}`);
-        await dbManager.insertData(perpspec, [{
+        config = Object.values(EXCHANGE_CONFIG).find(cfg => cfg.PERPSPEC === perpspec);  // Fixed: Use config
+        if (!config) throw new Error(`No config for ${perpspec}`);
+        
+        // Added: Validate cached lsr before insert
+        if (isNaN(c.lsr) || c.lsr <= 0) {
+          console.warn(`[${perpspec}] Invalid cached LSR for ${baseSymbol}; skipping release.`);
+          c.offsets.shift();
+          if (!c.offsets.length) delete data.cache;
+          continue;
+        }
+        
+        await dbManager.insertData([{
           ts: apiUtils.toMillis(BigInt(nextTs)),
           symbol: baseSymbol,
-          source: perpspec,
-          perpspec,
-          interval: exchange.DB_INTERVAL,
+          exchange: config.DB_EXCHANGE,
+          perpspec, // String; insertData wraps to array & appends uniquely (additive, no overwrite)
           lsr: c.lsr
         }]);
         c.offsets.shift();
@@ -234,9 +255,9 @@ async function pollAllSymbols() {
         }
       } catch (error) {
         errorCount++;
-        console.error(`[${perpspec}] Error polling ${baseSymbol}:`, error.message);
-        await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'API', 'POLL_ERROR', error.message, {
-          exchange: perpspec.split('-')[0],
+        console.error(`[${perpspec}] Error releasing cache for ${baseSymbol}:`, error.message);
+        await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'API', 'CACHE_RELEASE_ERROR', error.message, {  // Fixed: CACHE_RELEASE_ERROR
+          exchange: config ? config.DB_EXCHANGE : perpspec.split('-')[0],  // Safe fallback if config null
           symbol: baseSymbol,
           perpspec
         });

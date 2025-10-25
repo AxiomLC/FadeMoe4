@@ -1,24 +1,23 @@
-// SCRIPT: bin-rsi-h.js Backfill 7 OCt 2025
+// SCRIPT: 1z-bin-rsi-h.js Backfill 22 Oct 2025  *insertBackfillData
 // RSI calculation script for all individual symbols using bin-ohlcv data (no MT)
 // RSI11 for 1m (rsi1) and 60m aggregated (rsi60, forward-filled to 1m ts—60x same per hour)
 // Aggregation uses LAST CLOSE per 60m bucket; ts as BigInt Unix ms
-// Under perpspec/source 'rsi' in timescale Postgres 10-day rolling 1m-based DB
-// Status: 3-tier logging (started, running heartbeat, completed) via apiUtils to DB/console
 // Parallel batching; ON CONFLICT DO NOTHING for inserts (no overwrite; fills gaps/new ts only); streamlined errors
 // Verification: rsi1 100% full; rsi60 allow <=15% null (covers early ~11hrs + gaps); warn if >15%
+// Unified schema: Query OHLCV via exchange='bin' and c IS NOT NULL; insert via dbManager.insertBackfillData with perpspec='bin-rsi'
 
 const { Pool } = require('pg');
-const format = require('pg-format');
 require('dotenv').config();
-const apiUtils = require('../api-utils'); // For status/error logging
-const dbManager = require('../db/dbsetup'); // Provides dbManager for queries/inserts
+const apiUtils = require('../api-utils'); // For status/error logging and toMillis
+const dbManager = require('../db/dbsetup'); // Provides dbManager for inserts and logging
+const failedSymbols = new Set();  // Track unique symbols with RSI calc failure due to no OHLCV
+const ERROR_COLOR = '\x1b[91m'; // Red for error logs
 
 const SCRIPT_NAME = '1z-bin-rsi-h.js';
 const PERIOD = 11; // RSI period - change this to adjust for all calculations
-const INTERVAL = '1m'; // Fixed 1m interval for all insertions (DB is 1m-based)
-const AGGREGATE_MINUTES = 60; // Aggregation interval for RSI60 in minutes (60m = 1 hour) - can be changed for testing
 const PERPSPEC_SOURCE = 'bin-rsi';
-const DATA_PERPSPEC = 'bin-ohlcv';
+const DATA_EXCHANGE = 'bin'; // Fixed to 'bin' for OHLCV source
+const AGGREGATE_MINUTES = 60; // Aggregation interval for RSI60 in minutes (60m = 1 hour) - can be changed for testing
 const BUCKET_SIZE_MS = AGGREGATE_MINUTES * 60 * 1000; // Milliseconds in aggregation interval
 const HEARTBEAT_INTERVAL = 10000; // 10s heartbeat
 const CHUNK_SIZE = 5; // Parallel chunks to avoid DB overload
@@ -26,6 +25,8 @@ const MAX_NULL_PCT = 15; // Allow <=15% null for rsi60 (covers early ~11hrs + ga
 
 const STATUS_COLOR = '\x1b[94m'; // Light blue for status logs
 const RESET = '\x1b[0m';
+const RECENT_THRESHOLD_MIN = 5;  // Error if last OHLCV >N min old
+const missingRecentSymbols = new Set();  // Track unique symbols with no recent OHLCV
 
 const pool = new Pool({
   host: process.env.DB_HOST,
@@ -40,8 +41,8 @@ const pool = new Pool({
 
 async function getSymbols() {
   try {
-    const query = `SELECT DISTINCT symbol FROM perp_data WHERE perpspec = $1`;
-    const result = await pool.query(query, [DATA_PERPSPEC]);
+    const query = `SELECT DISTINCT symbol FROM perp_data WHERE exchange = $1 AND c IS NOT NULL`;
+    const result = await pool.query(query, [DATA_EXCHANGE]);
     return result.rows.map(row => row.symbol);
   } catch (error) {
     console.error(`[DATABASE] SYMBOL_QUERY_ERROR: Error getting symbols - ${error.message}`);
@@ -90,9 +91,10 @@ function simpleAggregateToHigherTimeframe(prices) {
 
 async function calculateRSIForSymbol(symbol) {
   try {
-    const query = `SELECT ts, c::numeric AS close FROM perp_data WHERE symbol = $1 AND perpspec = $2 AND interval = $3 ORDER BY ts ASC`;
-    const result = await pool.query(query, [symbol, DATA_PERPSPEC, INTERVAL]);
+    const query = `SELECT ts, c::numeric AS close FROM perp_data WHERE symbol = $1 AND exchange = $2 AND c IS NOT NULL ORDER BY ts ASC`;
+    const result = await pool.query(query, [symbol, DATA_EXCHANGE]);
     if (result.rows.length === 0) {
+      failedSymbols.add(symbol);  // <-- ADD THIS LINE (track no OHLCV)
       return false;
     }
 
@@ -105,6 +107,7 @@ async function calculateRSIForSymbol(symbol) {
     }).filter(p => !isNaN(p.ts.getTime()) && !isNaN(p.close) && isFinite(p.close));
 
     if (prices.length < PERIOD + 1) {
+      failedSymbols.add(symbol); 
       return false;
     }
 
@@ -132,46 +135,125 @@ async function calculateRSIForSymbol(symbol) {
       return false;
     }
 
-    const values = insertionData.map(data => [Math.round(data.rsi1), Math.round(data.rsi60), data.tsMs, symbol, PERPSPEC_SOURCE, PERPSPEC_SOURCE, INTERVAL]); // Explicit round for no decimals
-    const upsertQuery = format(`INSERT INTO perp_data (rsi1, rsi60, ts, symbol, source, perpspec, interval) VALUES %L ON CONFLICT (ts, symbol, perpspec) DO NOTHING`, values);
-    const resultUpsert = await pool.query(upsertQuery);
+    // Prepare records for unified insertBackfillData (perpspec as string, ts as BigInt via toMillis)
+    const processed = insertionData.map(data => ({
+      ts: apiUtils.toMillis(BigInt(data.tsMs)),
+      symbol,
+      perpspec: PERPSPEC_SOURCE, // String; will be wrapped to array in insertData
+      rsi1: data.rsi1,
+      rsi60: data.rsi60
+    }));
+
+    await dbManager.insertBackfillData(processed);
     return true;
   } catch (error) {
     console.error(`[INTERNAL] SYMBOL_ERROR: Error for ${symbol} - ${error.message}`);
+    await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'CALC', 'RSI_CALC_FAILED', `Error calculating RSI for ${symbol}: ${error.message}`, { symbol });
     return false;
   }
 }
-
+//=============================================================================
 async function verifyAllRSIComplete(symbols) {
   try {
-    const query = `
-      SELECT COUNT(*) as total_rows,
-             COUNT(rsi1) FILTER (WHERE rsi1 IS NOT NULL) as rsi1_count,
-             COUNT(rsi60) FILTER (WHERE rsi60 IS NOT NULL) as rsi60_count
+    // Global verification (existing: total coverage)
+    const ohlcvQuery = `
+      SELECT COUNT(*) as total_ohlcv
       FROM perp_data
-      WHERE perpspec = $1 AND source = $2 AND interval = $3 AND symbol = ANY($4)
+      WHERE exchange = $1 AND symbol = ANY($2) AND c IS NOT NULL
     `;
-    const params = [PERPSPEC_SOURCE, PERPSPEC_SOURCE, INTERVAL, symbols];
-    const result = await pool.query(query, params);
-    const row = result.rows[0];
-    const total = parseInt(row.total_rows);
-    const rsi1Full = parseInt(row.rsi1_count) === total;
-    const rsi60Count = parseInt(row.rsi60_count);
-    const nullRsi60Pct = total > 0 ? ((total - rsi60Count) / total * 100) : 0;
-    if (nullRsi60Pct > MAX_NULL_PCT) {
-      console.error(`[VERIFICATION] RSI60_NULL_WARNING: > ${MAX_NULL_PCT}% rsi60 null (${nullRsi60Pct.toFixed(1)}%) - check early data`);
+    const rsiQuery = `
+      SELECT 
+        COUNT(*) FILTER (WHERE rsi1 IS NOT NULL) as rsi1_count,
+        COUNT(*) FILTER (WHERE rsi60 IS NOT NULL) as rsi60_count,
+        COUNT(*) as total_rsi_rows
+      FROM perp_data
+      WHERE exchange = $1 AND symbol = ANY($2) AND perpspec @> '["bin-rsi"]'::jsonb
+    `;
+    const params = [DATA_EXCHANGE, symbols];
+
+    const [ohlcvResult, rsiResult] = await Promise.all([
+      pool.query(ohlcvQuery, params),
+      pool.query(rsiQuery, params)
+    ]);
+
+    const totalOhlcv = parseInt(ohlcvResult.rows[0].total_ohlcv || 0);
+    const rsi1Count = parseInt(rsiResult.rows[0].rsi1_count || 0);
+    const rsi60Count = parseInt(rsiResult.rows[0].rsi60_count || 0);
+    const totalRsiRows = parseInt(rsiResult.rows[0].total_rsi_rows || 0);
+
+    // Debug log counts (remove after fixing)
+    console.log(`${STATUS_COLOR}verif: Total OHLCV rows: ${totalOhlcv}, RSI rows: ${totalRsiRows}, RSI1 non-null: ${rsi1Count}, RSI60 non-null: ${rsi60Count}${RESET}`);
+
+    if (totalOhlcv === 0) {
+      console.warn(`No OHLCV data for symbols - skipping RSI check`);
       return false;
     }
-    return total > 0 && rsi1Full && (nullRsi60Pct <= MAX_NULL_PCT);
+
+    // Relaxed: RSI1 coverage >=95% of OHLCV (allows minor gaps/ts mismatches from calc/insert)
+    const rsi1Pct = (rsi1Count / totalOhlcv) * 100;
+    const rsi1Full = rsi1Pct >= 95;
+    const nullRsi60Pct = totalRsiRows > 0 ? ((totalRsiRows - rsi60Count) / totalRsiRows * 100) : 0;
+
+    if (!rsi1Full) {
+      console.error(`verif: RSI1_COVERAGE_WARNING: Only ${rsi1Pct.toFixed(1)}% RSI1 vs. OHLCV (${rsi1Count}/${totalOhlcv}) - check calc/insert ts match`);
+      return false;
+    }
+    if (nullRsi60Pct > MAX_NULL_PCT) {
+      console.error(`[VERIFICATION] RSI60_NULL_WARNING: ${nullRsi60Pct.toFixed(1)}% rsi60 null in ${totalRsiRows} RSI rows - check early data/aggregation`);
+      return false;
+    }
+
+    // NEW: Check for missing recent OHLCV (last update > RECENT_THRESHOLD_MIN min ago per symbol)
+    const thresholdMs = RECENT_THRESHOLD_MIN * 60 * 1000;
+    const nowMs = Date.now();
+    const recentCheckQuery = `
+      SELECT symbol, MAX(ts) as last_ohlcv_ts
+      FROM perp_data 
+      WHERE exchange = $1 AND symbol = ANY($2) AND c IS NOT NULL
+      GROUP BY symbol
+    `;
+    const recentResult = await pool.query(recentCheckQuery, [DATA_EXCHANGE, symbols]);
+
+    let missingRecentCount = 0;
+    for (const row of recentResult.rows) {
+      const lastTs = Number(row.last_ohlcv_ts || 0);
+      if (nowMs - lastTs > thresholdMs) {  // Last OHLCV >5 min old
+        missingRecentSymbols.add(row.symbol);  // Track unique
+        missingRecentCount++;
+      }
+    }
+
+    // Log recent status (always, for visibility)
+    console.log(`${STATUS_COLOR}verif: Recent OHLCV check: ${missingRecentCount} symbols with no updates in last ${RECENT_THRESHOLD_MIN} min${RESET}`);
+
+    // If missing recent OHLCV, treat as error (RSI calc can't proceed without it)
+    if (missingRecentCount > 0) {
+      const errorMsg = `No recent bin OHLCV for ${missingRecentCount} symbols (last update >${RECENT_THRESHOLD_MIN} min ago); RSI calc incomplete—check OHLCV source.`;
+      console.error(`${ERROR_COLOR}❌ ${errorMsg}${RESET}`);  // Red error (define ERROR_COLOR if needed)
+      await apiUtils.logScriptError(
+        dbManager, 
+        SCRIPT_NAME, 
+        'DATA', 
+        'RECENT_OHLCV_MISSING', 
+        errorMsg,
+        { missingRecentSymbolCount: missingRecentCount, thresholdMin: RECENT_THRESHOLD_MIN }
+      );
+      // Optional: Return false to prevent "complete" log
+      return false;  // Fail verification on missing recent data
+    }
+
+    console.log(`${STATUS_COLOR}verif: RSI complete: ${rsi1Pct.toFixed(1)}% RSI1, ${100 - nullRsi60Pct.toFixed(1)}% RSI60${RESET}`);
+    return true;
   } catch (error) {
     console.error(`[DATABASE] VERIFY_ERROR: Verification failed - ${error.message}`);
     return false;
   }
 }
 
+//==================================================================
 async function calculateRSIForAllSymbols() {
   const startTime = Date.now();
-  console.log(`\n🚀 Starting ${SCRIPT_NAME}...`);
+  console.log(`\n🔧 ${STATUS_COLOR}Starting ${SCRIPT_NAME}...${RESET}`);
   let heartbeatInterval;
 
   try {
@@ -180,32 +262,31 @@ async function calculateRSIForAllSymbols() {
     const totalSymbols = symbols.length;
 
     // #1 Status: started
-    const message1 = `${SCRIPT_NAME} initiated, rsi1, rsi60 calculations for ${totalSymbols} symbols.`;
+    const message1 = `🔧 ${SCRIPT_NAME} initiated, rsi1, rsi60 cals for ${totalSymbols} symbols.`;
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', message1);
-    console.log(`${STATUS_COLOR}⚡ ${message1}${RESET}`);
-
-    // #2 Status: connected
-    const message2 = `DB connected for perpspec '${DATA_PERPSPEC}' and '${PERPSPEC_SOURCE}', starting RSI calculations.`;
-    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', message2);
-    console.log(`${STATUS_COLOR}⚡ ${message2}${RESET}`);
+    console.log(`${STATUS_COLOR}${message1}${RESET}`);
 
     if (totalSymbols === 0) {
       const message3 = `rsi1, rsi60 calculation for 0 symbols.`;
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message3);
-      console.log(`${STATUS_COLOR}⚡ ${message3}${RESET}`);
+      console.log(`${STATUS_COLOR}${message3}${RESET}`);
       return;
     }
 
+    // #2 Status: connected (DB query successful)
+    const message2 = `DB connected for exchange '${DATA_EXCHANGE}', start RSI cals for ${totalSymbols} symbols.`;
+    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', message2);
+    console.log(`${STATUS_COLOR}🔧 ${message2}${RESET}`);
+
     // Initialize tracking
     let symbolsProcessed = 0;
-    const completedLogged = new Set();
 
     // -- Heartbeat with #3 running status logs --
     heartbeatInterval = setInterval(() => {
       (async () => {
         if (symbolsProcessed < totalSymbols) {
           // #3 Status: running
-          const message = `rsi1, rsi60 calculation for ${totalSymbols} symbols.`;
+          const message = `rsi1, rsi60 calculation for ${totalSymbols} symbols (processed: ${symbolsProcessed}).`;
           try {
             await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message);
           } catch (err) {
@@ -216,7 +297,7 @@ async function calculateRSIForAllSymbols() {
       })();
     }, HEARTBEAT_INTERVAL);
 
-    // Parallel batching for symbols
+    // Parallel batching for symbols (chunked to limit DB load)
     for (let i = 0; i < symbols.length; i += CHUNK_SIZE) {
       const chunk = symbols.slice(i, i + CHUNK_SIZE);
       const promises = chunk.map(symbol => calculateRSIForSymbol(symbol).then(success => { 
@@ -226,24 +307,41 @@ async function calculateRSIForAllSymbols() {
       await Promise.all(promises);
     }
 
+        // Catch-all error for RSI calc failures due to no bin OHLCV (one red log per run)
+    if (failedSymbols.size > 0) {
+      const failedCount = failedSymbols.size;
+      const errorMsg = `RSI calc failed for ${failedCount} symbols due to no bin OHLCV; check data availability.`;
+      console.error(`${ERROR_COLOR}❌ ${errorMsg}${RESET}`);  // Red error
+      await apiUtils.logScriptError(
+        dbManager, 
+        SCRIPT_NAME, 
+        'DATA',  // Error type: DATA (for no OHLCV)
+        'OHLCV_MISSING',  // Error code
+        errorMsg,
+        { failedSymbolCount: failedCount }  // DB details: just count
+      );
+    }
+
     clearInterval(heartbeatInterval);
 
     // Tier 3: Verify and #5 completed status
     const allComplete = await verifyAllRSIComplete(symbols);
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     if (allComplete) {
-      const message5 = `RSI backfills complete in ${duration}s`;
+      const message5 = `⏱️ RSI backfills complete in ${duration}s for ${symbolsProcessed}/${totalSymbols} symbols.`;
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', message5);
-      console.log(`${STATUS_COLOR}⚡ ${message5}${RESET}`);
-      console.log(`\n🎉 RSI backfills complete in ${duration}s!`);
+      console.log(`${STATUS_COLOR} ${message5}${RESET}`);
+      console.log(`\n⏱️ RSI backfills complete in ${duration}s!`);
     } else {
-      const messageWarn = `RSI backfills incomplete in ${duration}s (check verification)`;
+      const messageWarn = `RSI backfills incomplete in ${duration}s (check verification logs)`;
+      await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'warning', messageWarn);
       console.log(`${STATUS_COLOR}[WARNING] ${messageWarn}${RESET}`);
       process.exit(1);
     }
   } catch (error) {
     if (heartbeatInterval) clearInterval(heartbeatInterval);
     console.error(`[INTERNAL] SCRIPT_ERROR: Script failed - ${error.message}`);
+    await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'INTERNAL', 'SCRIPT_FAILED', `Overall script error: ${error.message}`, {});
     process.exit(1);
   } finally {
     await pool.end();

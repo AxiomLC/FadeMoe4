@@ -1,9 +1,9 @@
 /* =======================================================
- * MASTER-API.JS - PRODUCTION ORCHESTRATOR (REVISED)
+ * MASTER-API.JS - 25 Oct PRODUCTION ORCHESTRATOR (REVISED)
  * **apis\ folder: Block-based parallel execution with conditional triggers
  * Integrated status logging via apiUtils to dbsetup.js tables.
  * full parallel execution per block, DB-driven heartbeat after Block 2 start,
- * ======================================================= */
+ * =======run only perp_data backfil = "node master-api.js -only"  =============== */
 
 const fs = require('fs');
 const path = require('path');
@@ -15,7 +15,7 @@ const calcMetrics = require('./db/calc-metrics'); // Connect calc-metrics
 // User Controls - Adjust script block prefixes & triggers
 const BLOCK_1_PREFIX = '1-';
 const BLOCK_2_PREFIX = '2-';
-const TRIGGER_FILE = '1-all-ohlcv-h.js';
+const TRIGGER_FILE = '1-ohlcv-h.js';
 const TRIGGER_1Z_PREFIX = '1z-';
 
 // User-configurable heartbeat frequency in milliseconds
@@ -30,6 +30,7 @@ class MasterAPI {
     this.running = false;
     this.heartbeatInterval = null;
     this.runningScripts = new Map(); // Map script name => { module, stopFunction? }
+    this.metricsStarted = false; // NEW: Track if calc-metrics was started (for conditional stop)
   }
 
   // Initialization - Discover scripts from apis/ folder
@@ -154,7 +155,6 @@ class MasterAPI {
   // Run a script and return success status
   async runScript(script) {
     try {
-      // Log the full path being used
       // Verify the file exists
       if (!fs.existsSync(script.path)) {
         console.error(`🚨 FILE NOT FOUND: ${script.path}`);
@@ -239,8 +239,8 @@ class MasterAPI {
       }
     }
 
-    // Add this code to stop the calc-metrics.js process
-    if (calcMetrics && typeof calcMetrics.stopContinuously === 'function') {
+    // Conditionally stop calc-metrics if it was started (UPDATED: Check tracker)
+    if (this.metricsStarted && calcMetrics && typeof calcMetrics.stopContinuously === 'function') {
       try {
         console.log('Stopping calc-metrics.js...');
         await calcMetrics.stopContinuously();
@@ -255,22 +255,29 @@ class MasterAPI {
     console.log(`${STATUS_COLOR}#### ✅ MASTER API STOPPED ####${RESET}`);
   }
 
-  // Start sequence: initialize → Block 1 → Block 2 → heartbeat
-  async start() {
+  // Start sequence: initialize → Block 1 → Block 2 → heartbeat (UPDATED: Conditional metrics)
+  async start(noMetrics) { // FIXED: No default param (avoids lint E0151; check inside)
     await this.initialize();
     await this.runBlock1();
     await this.runBlock2();
 
-    // Start calc-metrics in continuous mode
-    calcMetrics.runContinuously()
-      .then(() => {
-        console.log("✅ calc-metrics.js triggered"); // ADDED LOG
-      })
-      .catch(err => {
-        console.error('❌ calc-metrics failed:', err);
-        // Log the error to the database
-        apiUtils.logScriptStatus(dbManager, 'master-api', 'error', `calc-metrics failed: ${err.message}`);
-      });
+    // Conditionally start calc-metrics in continuous mode (UPDATED: Skip if noMetrics)
+    const skipMetrics = noMetrics === true; // NEW: Internal check (true for -only; false/undefined = full mode)
+    if (!skipMetrics) {
+      this.metricsStarted = true; // NEW: Track for conditional stop in stop()
+      calcMetrics.runContinuously()
+        .then(() => {
+          console.log("✅ calc-metrics.js triggered");
+        })
+        .catch(err => {
+          console.error('❌ calc-metrics failed:', err);
+          // Log the error to the database
+          apiUtils.logScriptStatus(dbManager, 'master-api', 'error', `calc-metrics failed: ${err.message}`);
+        });
+    } else {
+      console.log(`${STATUS_COLOR}#### 📊 SKIPPING calc-metrics.js (-only data mode) ####${RESET}`); // NEW: Log skip for data-only
+      await apiUtils.logScriptStatus(dbManager, 'master-api', 'running', 'Master API in data-only mode (no metrics)'); // NEW: DB log for mode
+    }
   }
 }
 
@@ -278,6 +285,9 @@ class MasterAPI {
  * MODULE ENTRY POINT - CREATE INSTANCE & HANDLE SIGNALS
  * ======================================================= */
 if (require.main === module) {
+  const args = process.argv.slice(2); // NEW: Parse CLI args
+  const noMetrics = args.includes('-only'); // NEW: Detect -only flag for data-only mode
+
   const master = new MasterAPI();
 
   process.on('SIGINT', async () => {
@@ -299,23 +309,24 @@ if (require.main === module) {
     process.exit(1);
   });
 
-process.on('unhandledRejection', async (reason) => {
-  console.error('\n\x1b[35m\x1b[1m#### 💥 UNHANDLED REJECTION ####\x1b[0m', reason);
-  await apiUtils.logScriptStatus(dbManager, 'master-api', 'error', `Unhandled rejection: ${reason.message}`);
-  await master.stop();
-  process.exit(1);
-});
-
-  master.start().catch(async err => {
-    console.error('\x1b[35m\x1b[1m#### 💥 MASTER API START FAILED ####\x1b[0m', err);
-    await apiUtils.logScriptStatus(
-      dbManager,
-      'master-api',
-      'stopped',
-      'Master-Api start failed (error)'
-    );
+  process.on('unhandledRejection', async (reason) => {
+    console.error('\n\x1b[35m\x1b[1m#### 💥 UNHANDLED REJECTION ####\x1b[0m', reason);
+    await apiUtils.logScriptStatus(dbManager, 'master-api', 'error', `Unhandled rejection: ${reason.message}`);
+    await master.stop();
     process.exit(1);
   });
+
+  master.start(noMetrics) // UPDATED: Pass boolean (true for -only; false for full—matches internal check)
+    .catch(async err => {
+      console.error('\x1b[35m\x1b[1m#### 💥 MASTER API START FAILED ####\x1b[0m', err);
+      await apiUtils.logScriptStatus(
+        dbManager,
+        'master-api',
+        'stopped',
+        'Master-Api start failed (error)'
+      );
+      process.exit(1);
+    });
 }
 
 module.exports = MasterAPI;

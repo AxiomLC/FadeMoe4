@@ -1,6 +1,9 @@
 /* ==========================================
- * 1z-web-ohlcv-c.js   (Revised 14 Oct 2025)
+ * 1z-web-ohlcv-c.js   (Revised 22 Oct 2025 - Unified Schema)
  * Continuous WebSocket OHLCV Collector
+ * Unified: Inserts via insertData (partial DO UPDATE with COALESCE/append perpspec for -c.js)
+ * MT: Aggregate as 'bin-mt' perpspec (OHLCV-like, exchange='bin')
+ * No source/interval fields; perpspec as JSONB array (wrapped from string)
  * ========================================== */
 
 const WebSocket = require('ws');
@@ -23,6 +26,8 @@ const ERROR_COLOR = '\x1b[91m'; // Red
  * ========================================== */
 const MT_SYMBOLS = ['ETH', 'BTC', 'XRP', 'SOL'];
 const MT_SYMBOL = 'MT';
+const MT_PERPSPEC = 'bin-ohlcv'; // Special perpspec for MT aggregate (OHLCV-like)
+
 
 /* ==========================================
  * EXCHANGE CONFIGURATION
@@ -30,14 +35,14 @@ const MT_SYMBOL = 'MT';
 const EXCHANGE_CONFIG = {
   BINANCE: {
     PERPSPEC: 'bin-ohlcv',
-    DB_INTERVAL: '1m',
+    DB_EXCHANGE: 'bin',
     mapSymbol: sym => `${sym.toLowerCase()}usdt`,
     getWsUrl: sym => `wss://fstream.binance.com/ws/${sym.toLowerCase()}usdt@kline_1m`
   },
   BYBIT: {
     PERPSPEC: 'byb-ohlcv',
+    DB_EXCHANGE: 'byb',
     WS_URL: 'wss://stream.bybit.com/v5/public/linear',
-    DB_INTERVAL: '1m',
     mapSymbol: sym => {
       const memeCoins = ['BONK', 'PEPE', 'FLOKI', 'TOSHI'];
       return memeCoins.includes(sym) ? `1000${sym}USDT` : `${sym}USDT`;
@@ -52,8 +57,8 @@ const EXCHANGE_CONFIG = {
   },
   OKX: {
     PERPSPEC: 'okx-ohlcv',
+    DB_EXCHANGE: 'okx',
     WS_URL: 'wss://ws.okx.com:8443/ws/v5/business',
-    DB_INTERVAL: '1m',
     mapSymbol: sym => `${sym}-USDT-SWAP`
   }
 };
@@ -88,8 +93,8 @@ async function checkAllConnected() {
   if (!connectedLogged && connectedFlags.BINANCE && connectedFlags.BYBIT && connectedFlags.OKX) {
     connectedLogged = true;
     const perpspecs = 'bin-ohlcv, byb-ohlcv, okx-ohlcv';
-    const message = `${perpspecs} websockets connected, fetching started.`;
-    console.log(`✈️ ${STATUS_COLOR} ${message}${RESET}`);
+    const message = `🚦 ${perpspecs} websockets connected, fetching started.`;
+    console.log(`${STATUS_COLOR}${message}${RESET}`);
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', message);
   }
 }
@@ -102,31 +107,32 @@ function computeMTRecord(currentTs) {
   let count = 0;
   for (const sym of MT_SYMBOLS) {
     const latest = mtLatestData.get(sym);
-    if (latest && latest.ts <= currentTs) {
+    if (latest && latest.ts <= currentTs && !isNaN(latest.o) && !isNaN(latest.h) && 
+        !isNaN(latest.l) && !isNaN(latest.c) && !isNaN(latest.v) && latest.o > 0) {  // o > 0 avoids zero-price edge cases if needed
       totalO += latest.o; totalH += latest.h; totalL += latest.l;
       totalC += latest.c; totalV += latest.v; count++;
     }
   }
   if (count === 0) return null;
   return {
-    ts: currentTs,
+    ts: apiUtils.toMillis(BigInt(currentTs)),  // Ensure BigInt-compatible ts for unified insert
     symbol: MT_SYMBOL,
-    source: 'bin-ohlcv',
-    perpspec: 'bin-ohlcv',
-    interval: '1m',
+    exchange: 'bin', // MT from bin data
+    perpspec: MT_PERPSPEC, // String; insertData wraps to array for JSONB
     o: totalO / count,
     h: totalH / count,
     l: totalL / count,
     c: totalC / count,
-    v: totalV
+    v: totalV  // Sum total volume (not averaged)
   };
 }
 
-async function insertMT(perpspec, mtRecord) {
+async function insertMT(mtRecord) {
   try {
     if (!mtRecord) return;
-    await dbManager.insertData(perpspec, [mtRecord]);
-    console.log(`🛫 ${STATUS_COLOR}MT Market Trend token 1m${RESET}`);
+    // Use insertData for continuous MT (partial update; appends to perpspec array)
+    await dbManager.insertData([mtRecord]);
+    console.log(`${STATUS_COLOR}MT Market Trend token 1m${RESET}`);
   } catch (error) {
     await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'INTERNAL', 'MT_INSERT_FAILED', error.message);
     console.error(`${ERROR_COLOR}❌ MT insert failed: ${error.message}${RESET}`);
@@ -134,7 +140,7 @@ async function insertMT(perpspec, mtRecord) {
 }
 
 /* ==========================================
- * PROCESS + INSERT
+ * PROCESS + INSERT (UNIFIED: perpspec as string → array in insertData; ts as BigInt-compatible)
  * ========================================== */
 async function processAndInsert(exchange, baseSymbol, rawData) {
   const config = EXCHANGE_CONFIG[exchange];
@@ -146,45 +152,71 @@ async function processAndInsert(exchange, baseSymbol, rawData) {
     // BINANCE
     if (exchange === 'BINANCE') {
       const k = rawData.k;
-      const ts = apiUtils.toMillis(BigInt(k.t));
-      record = { ts, symbol: baseSymbol, source: perpspec, perpspec,
-        interval: config.DB_INTERVAL, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.q };
-      if (MT_SYMBOLS.includes(baseSymbol)) mtLatestData.set(baseSymbol, { ts, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.q });
+      if (!k || !k.x) return;  // Only confirmed candles
+      const ts = apiUtils.toMillis(BigInt(k.t)); // Floored BigInt ms for unified ts
+      record = { 
+        ts, 
+        symbol: baseSymbol, 
+        exchange: config.DB_EXCHANGE,
+        perpspec, // String; _mergeRawData wraps to ['bin-ohlcv'] for JSONB
+        o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.q 
+      };
+      if (MT_SYMBOLS.includes(baseSymbol)) {
+        mtLatestData.set(baseSymbol, { ts: Number(ts), o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.q });
+      }
     }
     // BYBIT
     else if (exchange === 'BYBIT') {
       const k = rawData.data && rawData.data[0];
-      if (!k) return;
-      record = { ts: BigInt(k.start), symbol: baseSymbol, source: perpspec, perpspec,
-        interval: config.DB_INTERVAL, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +(k.turnover || 0) };
+      if (!k || !k.confirm) return;  // Only confirmed
+      const ts = apiUtils.toMillis(BigInt(k.start)); // Floored BigInt ms
+      record = { 
+        ts, 
+        symbol: baseSymbol, 
+        exchange: config.DB_EXCHANGE,
+        perpspec, // String; wrapped to array
+        o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +(k.turnover || 0) 
+      };
     }
     // OKX
     else if (exchange === 'OKX') {
       const c = rawData.data && rawData.data[0];
-      if (!c) return;
-      const ts = apiUtils.toMillis(BigInt(c[0]));
-      record = { ts, symbol: baseSymbol, source: perpspec, perpspec,
-        interval: config.DB_INTERVAL, o: +c[1], h: +c[2], l: +c[3], c: +c[4], v: +(c[7] || 0) };
+      if (!c || c[8] !== "1") return;  // Only confirmed (c[8] === "1")
+      const ts = apiUtils.toMillis(BigInt(c[0])); // Already ms; ensure BigInt
+      record = { 
+        ts, 
+        symbol: baseSymbol, 
+        exchange: config.DB_EXCHANGE,
+        perpspec, // String; wrapped to array
+        o: +c[1], h: +c[2], l: +c[3], c: +c[4], v: +(c[7] || 0) 
+      };
     }
 
     if (!record) return;
-    await dbManager.insertData(perpspec, [record]);
+
+    // Insert via insertData (partial DO UPDATE with COALESCE; appends unique perpspec)
+    await dbManager.insertData([record]);
     completedSymbols[perpspec].add(baseSymbol);
 
     const expectedCount = exchange === 'BYBIT' ? bybitActiveSymbols.size : perpList.length;
     if (completedSymbols[perpspec].size === expectedCount) {
-      const msg = `🛫 ${STATUS_COLOR}${perpspec} 1min ohlcv for ${expectedCount} symbols${RESET}`;
-      console.log(msg);
-      await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg.replace(STATUS_COLOR, '').replace(RESET, ''));
+      const msg = `${perpspec} 1min ohlcv for ${expectedCount} symbols`;
+      console.log(`${STATUS_COLOR}🚥 ${msg}${RESET}`);
+      await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg);
 
       if (perpspec === 'bin-ohlcv') {
-        const latestTs = Array.from(mtLatestData.values()).find(d => d && d.ts)?.ts;
-        if (latestTs) await insertMT('bin-ohlcv', computeMTRecord(latestTs));
+        // Improved latestTs calculation: Use max ts among MT symbols (more robust if slight desync in WS confirmations; aligns with backfiller's forward-fill per ts). All should be synced for 1m closes, but safeguards against partial updates.
+        const mtValues = Array.from(mtLatestData.values()).filter(d => d && !isNaN(d.ts));
+        if (mtValues.length === 0) return;  // No MT data yet; skip (prevents undefined currentTs)
+        const latestTs = Math.max(...mtValues.map(d => d.ts));
+        const mtRecord = computeMTRecord(latestTs);
+        if (mtRecord) await insertMT(mtRecord);
       }
       completedSymbols[perpspec].clear();
     }
   } catch (error) {
     await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'INTERNAL', 'INSERT_FAILED', error.message, { perpspec, symbol: baseSymbol });
+    console.error(`${ERROR_COLOR}❌ Insert failed for ${perpspec} ${baseSymbol}: ${error.message}${RESET}`);
   }
 }
 
@@ -269,7 +301,7 @@ async function okxWebSocket() {
  * MAIN EXECUTION
  * ========================================== */
 async function execute() {
-  console.log(`✈️ ${STATUS_COLOR} Starting ${SCRIPT_NAME} - WebSocket OHLCV streaming${RESET}`);
+  console.log(`${STATUS_COLOR}🚦 Starting ${SCRIPT_NAME} - WebSocket OHLCV streaming${RESET}`);
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);
 
   binanceWebSocket();
@@ -277,7 +309,7 @@ async function execute() {
   okxWebSocket();
 
   process.on('SIGINT', async () => {
-    console.log(`\n✈️ ${SCRIPT_NAME} received SIGINT, stopped smoothly`);
+    console.log(`\n${STATUS_COLOR}🚦 ${SCRIPT_NAME} received SIGINT, stopped smoothly${RESET}`);
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', `${SCRIPT_NAME} stopped smoothly`);
     process.exit(0);
   });

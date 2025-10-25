@@ -1,11 +1,13 @@
 /* ==========================================
- * web-lq-c.js   15 Oct 2025
+ * web-lq-c.js   22 Oct 2025 - Unified Schema
  * Continuous WebSocket Liquidation Collector with 1-minute Bucketing
  *
  * Streams liquidation data from Binance, Bybit, and OKX
  * Aggregates liquidation events into 1-minute buckets per symbol
  * Inserts aggregated liquidation data into the database
  * Tracks liquidation side (majority), average price, and total quantity per minute
+ * Unified: insertData (partial DO UPDATE); no source/interval; explicit exchange
+ * Tie-breaker: Queries unified perp_data by exchange/symbol/ts (no perpspec filter)
  * ========================================== */
 
 const WebSocket = require('ws');
@@ -21,17 +23,20 @@ const RESET = '\x1b[0m';
 const EXCHANGE_CONFIG = {
   BINANCE: {
     PERPSPEC: 'bin-lq',
+    EXCHANGE: 'bin',
     WS_BASE: 'wss://fstream.binance.com/ws/ws',
     mapSymbol: sym => `${sym.toLowerCase()}usdt`,
     getWsUrl: sym => `wss://fstream.binance.com/ws/${sym.toLowerCase()}usdt@forceOrder`
   },
   BYBIT: {
     PERPSPEC: 'byb-lq',
+    EXCHANGE: 'byb',
     WS_URL: 'wss://stream.bybit.com/v5/public/linear',
     mapSymbol: sym => `${sym}USDT`
   },
   OKX: {
     PERPSPEC: 'okx-lq',
+    EXCHANGE: 'okx',
     WS_URL: 'wss://ws.okx.com:8443/ws/v5/public',
     mapSymbol: sym => `${sym}-USDT-SWAP`
   }
@@ -76,6 +81,7 @@ function updateBucket(perpspec, symbol, ts, side, price, qty) {
     symbolBuckets.set(bucketTs, {
       ts: bucketTs,
       symbol,
+      exchange: EXCHANGE_CONFIG[Object.keys(EXCHANGE_CONFIG).find(key => EXCHANGE_CONFIG[key].PERPSPEC === perpspec)].EXCHANGE,
       perpspec,
       lqsideCounts: { long: 0, short: 0 },
       lqpriceSum: 0,
@@ -108,15 +114,16 @@ async function determineLqside(bucket) {
   // Tie-breaker: compare avg price to OHLCV high/low for symbol and bucketTs
   const avgPrice = bucket.lqpriceSum / bucket.lqpriceCount;
 
-  // Query OHLCV for symbol and bucketTs
+  // Query OHLCV for symbol and bucketTs (unified: by exchange/symbol/ts, no perpspec filter)
+  const config = EXCHANGE_CONFIG[Object.keys(EXCHANGE_CONFIG).find(key => EXCHANGE_CONFIG[key].PERPSPEC === bucket.perpspec)];
   const query = `
     SELECT h, l FROM perp_data
-    WHERE symbol = $1 AND perpspec LIKE '%ohlcv'
-      AND ts = $2
+    WHERE symbol = $1 AND exchange = $2 AND ts = $3
+      AND (o IS NOT NULL OR h IS NOT NULL OR l IS NOT NULL OR c IS NOT NULL OR v IS NOT NULL)
     LIMIT 1
   `;
   try {
-    const result = await dbManager.pool.query(query, [bucket.symbol, BigInt(bucket.ts)]);
+    const result = await dbManager.query(query, [bucket.symbol, config.EXCHANGE, BigInt(bucket.ts)]);
     if (result.rows.length === 0) {
       // No OHLCV data, default to 'long'
       return 'long';
@@ -149,19 +156,20 @@ async function flushBuckets() {
           bucket.lqprice = bucket.lqpriceSum / bucket.lqpriceCount;
           bucket.lqqty = bucket.lqqtySum;
 
-          // Prepare record for DB insert - ts as BigInt here
+          // Prepare record for DB insert - ts as BigInt, unified format
           const record = {
-            ts: BigInt(bucket.ts),
+            ts: apiUtils.toMillis(BigInt(bucket.ts)),
             symbol: bucket.symbol,
-            source: perpspec,
-            perpspec,
+            exchange: bucket.exchange,
+            perpspec: bucket.perpspec, // String; insertData wraps to array
             lqside: bucket.lqside,
             lqprice: bucket.lqprice,
             lqqty: bucket.lqqty
           };
 
           try {
-            await dbManager.insertData(perpspec, [record]);
+            // Insert via insertData (for -c.js: partial DO UPDATE)
+            await dbManager.insertData([record]);
             liquidationCounts[perpspec] = (liquidationCounts[perpspec] || 0) + 1;
           } catch (error) {
             console.error(`Error inserting bucketed liquidation for ${perpspec} ${symbol} at ${bucket.ts}: ${error.message}`);

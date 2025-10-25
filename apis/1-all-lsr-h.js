@@ -1,27 +1,24 @@
-// SCRIPT: all-lsr-h.js  14 Oct 2025
-// Unified Long/Short Ratio Backfill Script for Binance, Bybit, and OKX
-// Optimized for maximum speed with improved status logging
+// SCRIPT: all-lsr-h.js  22 Oct 2025
+// Revised Unified Long/Short Ratio Backfill Script for Binance, Bybit, and OKX
+// - Uses unified **insertBackfillData with merged rows
+// - Improved status logging with connection verification and heartbeat
+// - Drops interval/source fields per new schema
 
 const axios = require('axios');
 const dbManager = require('../db/dbsetup');
 const apiUtils = require('../api-utils');
 const perpList = require('../perp-list');
 const pLimit = require('p-limit');
+const weightMonitor = require('../b-weight');
 
 const SCRIPT_NAME = 'all-lsr-h.js';
 const DAYS = 10;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.now();
 const START = NOW - DAYS * MS_PER_DAY;
-const weightMonitor = require('../b-weight');
 
-// User-configurable console color for status logs (light blue)
-const STATUS_LOG_COLOR = '\x1b[36m';
-const STATUS_LOG_RESET = '\x1b[0m';
-
-// ============================================================================
-// SHARED UTILITIES
-// ============================================================================
+const STATUS_COLOR = '\x1b[36m'; // Cyan/light blue
+const RESET = '\x1b[0m';
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -43,23 +40,23 @@ function normalizeNumeric(value) {
 
 const EXCHANGES = {
   BINANCE: {
-    perpspec: 'bin-lsr',  // Keep for logging/error purposes
+    perpspec: 'bin-lsr',
     url: 'https://fapi.binance.com/futures/data/globalLongShortAccountRatio',
     limit: 500,
-    rateDelay: 200,  // 40 req/sec = 25ms delay
+    rateDelay: 200,
     concurrency: 5,
     timeout: 8000,
     apiInterval: '5m',
-    apiCandlesTarget: DAYS * 288,  // 288 x 5min candles per day
+    apiCandlesTarget: DAYS * 288,
     mapSymbol: sym => `${sym}USDT`,
     fetch: fetchBinanceLSR,
     process: processBinanceData
   },
   BYBIT: {
-    perpspec: 'byb-lsr',  // Keep for logging/error purposes
+    perpspec: 'byb-lsr',
     url: 'https://api.bybit.com/v5/market/account-ratio',
     limit: 500,
-    rateDelay: 100,  // 120 req/sec = ~8ms delay
+    rateDelay: 100,
     concurrency: 8,
     timeout: 8000,
     apiInterval: '5min',
@@ -69,14 +66,14 @@ const EXCHANGES = {
     process: processBybitData
   },
   OKX: {
-    perpspec: 'okx-lsr',  // Keep for logging/error purposes
+    perpspec: 'okx-lsr',
     url: 'https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract',
     limit: 100,
-    rateDelay: 300,  // 2.5 req/sec = 400ms delay
+    rateDelay: 300,
     concurrency: 6,
     timeout: 8000,
     apiInterval: '5m',
-    apiCandlesTarget: 5 * 288,  // OKX only returns 5 days max
+    apiCandlesTarget: 5 * 288,
     mapSymbol: sym => `${sym}-USDT-SWAP`,
     fetch: fetchOKXLSR,
     process: processOKXData
@@ -86,7 +83,7 @@ const EXCHANGES = {
 // ============================================================================
 // FETCH FUNCTIONS
 // ============================================================================
-//=================BINANCE========================================
+
 async function fetchBinanceLSR(symbol, config, startTs, endTs) {
   let allData = [];
   let currentStart = floorToMinute(startTs);
@@ -98,31 +95,23 @@ async function fetchBinanceLSR(symbol, config, startTs, endTs) {
   }
 
   while (currentStart < flooredEnd) {
-    // FIX: Add endTime parameter to properly limit the time range
     const nextEnd = Math.min(currentStart + config.limit * 5 * 60 * 1000, flooredEnd);
-    
     const params = {
       symbol: symbol,
       period: config.apiInterval,
       limit: config.limit,
       startTime: currentStart,
-      endTime: nextEnd  // ADD THIS LINE
+      endTime: nextEnd
     };
-//******************************** below line, 120 added Oct 13 for b-Weight   */
     try {
       const response = await axios.get(config.url, { params, timeout: config.timeout });
       weightMonitor.logRequest('bin-lsr', '/futures/data/globalLongShortAccountRatio', 1);
       const data = response.data;
-
       if (!data || data.length === 0) break;
-
       allData.push(...data);
-
       const lastTimestamp = data[data.length - 1].timestamp;
       currentStart = lastTimestamp + 5 * 60 * 1000;
-
       if (data.length < config.limit) break;
-
       await sleep(config.rateDelay);
     } catch (error) {
       console.error(`[${config.perpspec}] Fetch error for ${symbol}:`, error.message);
@@ -133,7 +122,6 @@ async function fetchBinanceLSR(symbol, config, startTs, endTs) {
   return allData.filter(d => d.timestamp >= startTs && d.timestamp <= endTs);
 }
 
-//=================BYBIT========================================
 async function fetchBybitLSR(symbol, config, startTs, endTs) {
   let allData = [];
   let currentEnd = endTs;
@@ -152,17 +140,12 @@ async function fetchBybitLSR(symbol, config, startTs, endTs) {
       const response = await axios.get(config.url, { params, timeout: config.timeout });
       const data = response.data;
       const list = data.result?.list;
-
       if (!list || list.length === 0) break;
-
       const newData = list.filter(d => parseInt(d.timestamp, 10) < currentEnd);
       allData.unshift(...newData);
-
       const oldestTimestamp = parseInt(list[list.length - 1].timestamp, 10);
       currentEnd = oldestTimestamp - 1;
-
       if (allData.length >= config.apiCandlesTarget) break;
-
       await sleep(config.rateDelay);
     } catch (error) {
       console.error(`[${config.perpspec}] Fetch error for ${symbol}:`, error.message);
@@ -176,12 +159,10 @@ async function fetchBybitLSR(symbol, config, startTs, endTs) {
   });
 }
 
-//=================OKX========================================
 async function fetchOKXLSR(symbol, config, startTs, endTs) {
   const allData = [];
   const seenTimestamps = new Set();
-  
-  let currentEnd = endTs;  // CHANGE: Use currentEnd instead of currentBefore
+  let currentEnd = endTs;
   let hasMoreData = true;
   let zeroNewCount = 0;
 
@@ -189,50 +170,35 @@ async function fetchOKXLSR(symbol, config, startTs, endTs) {
     const params = {
       instId: symbol,
       period: config.apiInterval,
-      end: currentEnd.toString(),  // CHANGE: Use 'end' instead of 'before'
+      end: currentEnd.toString(),
       limit: config.limit
     };
 
     try {
-      const response = await axios.get(config.url, { 
-        params, 
-        timeout: config.timeout
-      });
-
+      const response = await axios.get(config.url, { params, timeout: config.timeout });
       if (response.data.code !== '0') break;
-
       const records = response.data.data || [];
-      
       if (records.length === 0) break;
-
       let newRecordsCount = 0;
       let oldestTimestamp = currentEnd;
-
       for (const record of records) {
-        const ts = parseInt(record[0]);  // timestamp is first element in array
+        const ts = parseInt(record[0]);
         if (seenTimestamps.has(ts) || ts < startTs || ts > endTs) continue;
-        
         seenTimestamps.add(ts);
         allData.push(record);
         newRecordsCount++;
-        
         if (ts < oldestTimestamp) oldestTimestamp = ts;
       }
-
-      // Fast exit on duplicates
       if (newRecordsCount === 0) {
         zeroNewCount++;
         if (zeroNewCount >= 2) break;
       } else {
         zeroNewCount = 0;
       }
-
       if (oldestTimestamp <= startTs) break;
       if (records.length < config.limit) break;
-
-      currentEnd = oldestTimestamp - 1;  // This was correct
+      currentEnd = oldestTimestamp - 1;
       await sleep(config.rateDelay);
-
     } catch (error) {
       if (error.response?.status === 429) {
         await sleep(1000);
@@ -246,127 +212,140 @@ async function fetchOKXLSR(symbol, config, startTs, endTs) {
 }
 
 // ============================================================================
-// DATA PROCESSING FUNCTIONS (Updated: Drop interval/source, keep perpspec for logging)
-// ============================================================================
-
-//=================BINANCE========================================
+// DATA PROCESSING FUNCTIONS
+// ========================  Binance  =========================================
 function processBinanceData(rawData, baseSymbol, config) {
-  const perpspec = config.perpspec;  // Keep for logging/error purposes
+  const perpspec = config.perpspec;
   const result = [];
+  const now = Date.now();
+  const floorNow = Math.floor(now / 60000) * 60000;
+  const nextMinute = floorNow + 60000;
 
   for (const dataPoint of rawData) {
     try {
       const timestamp = dataPoint.timestamp;
       const lsr = parseFloat(dataPoint.longShortRatio);
-
       if (!isNaN(lsr)) {
-        // Create 5 x 1m records from each 5m candle (preserve 5min-to-1min parsing/calc)
         for (let i = 0; i < 5; i++) {
           const minuteTs = timestamp + (i * 60 * 1000);
-          result.push({
-            ts: apiUtils.toMillis(BigInt(minuteTs)),
-            symbol: baseSymbol,
-            perpspec,  // Keep for logging/error purposes
-            lsr
-            // Dropped: source, interval (no longer in schema)
-          });
+          // Only include timestamps up to the next minute after now
+          if (minuteTs <= nextMinute) {
+            result.push({
+              ts: apiUtils.toMillis(BigInt(minuteTs)),
+              symbol: baseSymbol,
+              perpspec,
+              lsr
+            });
+          }
+          // else skip future timestamps
         }
       }
-    } catch (e) {
-      // Skip invalid records
-    }
+    } catch {}
   }
-
   return result;
 }
-
-//=================BYBIT========================================
+//======================= bybit =============================
 function processBybitData(rawData, baseSymbol, config) {
-  const perpspec = config.perpspec;  // Keep for logging/error purposes
+  const perpspec = config.perpspec;
   const result = [];
+  const now = Date.now();
+  const floorNow = Math.floor(now / 60000) * 60000;
+  const nextMinute = floorNow + 60000;
 
   for (const dataPoint of rawData) {
     try {
       const timestamp = parseInt(dataPoint.timestamp, 10);
       const buyRatio = parseFloat(dataPoint.buyRatio);
       const sellRatio = parseFloat(dataPoint.sellRatio);
-
-      // Calculate LSR: buyRatio / sellRatio (preserve calc)
       if (!isNaN(buyRatio) && !isNaN(sellRatio) && sellRatio !== 0) {
         const lsr = buyRatio / sellRatio;
-
-        // Create 5 x 1m records from each 5m candle (preserve 5min-to-1min parsing/calc)
         for (let i = 0; i < 5; i++) {
           const minuteTs = timestamp + (i * 60 * 1000);
+          if (minuteTs <= nextMinute) {
+            result.push({
+              ts: apiUtils.toMillis(BigInt(minuteTs)),
+              symbol: baseSymbol,
+              perpspec,
+              lsr
+            });
+          }
+        }
+      }
+    } catch {}
+  }
+  return result;
+}
+//=============  OKX  ==================================
+function processOKXData(rawData, baseSymbol, config) {
+  const perpspec = config.perpspec;
+  const result = [];
+  const now = Date.now();
+  const floorNow = Math.floor(now / 60000) * 60000;
+  const nextMinute = floorNow + 60000;
+
+  let lastLsr = null;
+  let lastTimestamp = null;
+
+  // Process raw data into 1-minute intervals
+  for (const record of rawData) {
+    const timestamp = parseInt(record[0]);
+    const lsr = normalizeNumeric(record[1]);
+    if (lsr !== null && !isNaN(timestamp)) {
+      for (let i = 0; i < 5; i++) {
+        const minuteTs = timestamp + (i * 60 * 1000);
+        if (minuteTs <= nextMinute) {
           result.push({
             ts: apiUtils.toMillis(BigInt(minuteTs)),
             symbol: baseSymbol,
-            perpspec,  // Keep for logging/error purposes
+            perpspec,
             lsr
-            // Dropped: source, interval (no longer in schema)
           });
+          lastLsr = lsr;
+          lastTimestamp = minuteTs;
         }
       }
-    } catch (e) {
-      // Skip invalid records
+    }
+  }
+
+  // Fill missing minutes up to nextMinute by repeating last known LSR
+  if (lastTimestamp !== null && lastTimestamp < nextMinute && lastLsr !== null) {
+    let fillTs = lastTimestamp + 60000;
+    while (fillTs <= nextMinute) {
+      result.push({
+        ts: apiUtils.toMillis(BigInt(fillTs)),
+        symbol: baseSymbol,
+        perpspec,
+        lsr: lastLsr
+      });
+      fillTs += 60000;
     }
   }
 
   return result;
 }
 
-//=================OKX========================================
-function processOKXData(rawData, baseSymbol, config) {
-  const perpspec = config.perpspec;  // Keep for logging/error purposes
-  const result = [];
-
-  for (const record of rawData) {
-    const timestamp = parseInt(record[0]);
-    const lsr = normalizeNumeric(record[1]);  // Preserve normalization
-
-    if (lsr !== null && !isNaN(timestamp)) {
-      // Create 5 x 1m records from each 5m candle (preserve 5min-to-1min parsing/calc)
-      for (let i = 0; i < 5; i++) {
-        const minuteTs = timestamp + (i * 60 * 1000);
-        result.push({
-          ts: apiUtils.toMillis(BigInt(minuteTs)),
-          symbol: baseSymbol,
-          perpspec,  // Keep for logging/error purposes
-          lsr
-          // Dropped: source, interval (no longer in schema)
-        });
-      }
-    }
-  }
-
-  return result;
-}
 
 // ============================================================================
-// MAIN BACKFILL FUNCTION (Updated: Unify inserts per symbol across exchanges)
+// MAIN BACKFILL FUNCTION
 // ============================================================================
 
 async function backfill() {
   const startTime = Date.now();
-  
-  // #1 STATUS: started
   const totalSymbols = perpList.length;
   const perpspecs = Object.values(EXCHANGES).map(ex => ex.perpspec);
   const perpspecsStr = perpspecs.join(', ');
-  await apiUtils.logScriptStatus(
-    dbManager,
-    SCRIPT_NAME,
-    'started',
-    `Starting ${SCRIPT_NAME} backfill for Long/Short Ratios; ${totalSymbols} symbols.`
-  );
-  console.log(`${STATUS_LOG_COLOR}🥭 Starting ${SCRIPT_NAME} backfill for Long/Short Ratios; ${totalSymbols} symbols.${STATUS_LOG_RESET}`);
 
-  // Track perpspec connection and completion status (keep for logging)
+  // #1 STATUS: started ////// STATUSES ==================================
+  const message1 = `Starting ${SCRIPT_NAME} backfill for Long/Short Ratios; ${totalSymbols} symbols.`;
+  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', message1);
+  console.log(`${STATUS_COLOR}${message1}${RESET}`);
+
+  // Track connection and completion
   const connectedPerpspecs = new Set();
-  const completedSymbols = {};
+  const completedSymbolsPerPerpspec = {};
   const completedPerpspecs = new Set();
   for (const p of perpspecs) {
-    completedSymbols[p] = new Set();
+    completedSymbolsPerPerpspec[p] = new Set();
   }
 
   // #2 STATUS: connected when all perpspecs connected
@@ -379,131 +358,95 @@ async function backfill() {
     for (const p of perpspecs) {
       if (!completedPerpspecs.has(p)) {
         const msg = `${p} backfilling db.`;
-        await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg);
-        console.log(`${STATUS_LOG_COLOR}${msg}${STATUS_LOG_RESET}`);
+        try {
+          await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg);
+        } catch (err) {
+          console.error(`[heartbeat] DB log failed for ${p}:`, err.message);
+        }
+        console.log(`${STATUS_COLOR}${msg}${RESET}`);
       }
     }
-  }, 30 * 1000);
+  }, 20000);
 
-  // Parallel processing over symbols (each symbol collects from all exchanges, then merges/inserts once)
-  const promises = perpList.map(baseSym => 
-    (async () => {  // Per-symbol task (parallel across symbols)
-      const allExchangeData = [];  // Collect LSR data from all exchanges for this symbol
-      let connectedExchanges = new Set();  // Track connections per symbol for logging
+  //  ///////////////// PROCESSING ====================================
+  // Parallel processing per symbol
+  const limiters = {};
+  for (const exKey of Object.keys(EXCHANGES)) {
+    limiters[exKey] = pLimit(EXCHANGES[exKey].concurrency);
+  }
 
-      for (const exKey of Object.keys(EXCHANGES)) {
-        const config = EXCHANGES[exKey];
-        const symbol = config.mapSymbol(baseSym);
+  const promises = perpList.map(baseSym => (async () => {
+    const allData = [];
+    const connectedExchanges = new Set();
 
-        try {
-          // Detect first successful connection per perpspec (keep legacy logging)
-          if (!connectedPerpspecs.has(config.perpspec)) {
-            connectedPerpspecs.add(config.perpspec);
-            if (connectedPerpspecs.size === perpspecs.length && !connectedLogged) {
-              const connectedMsg = `${perpspecsStr} connected, starting fetch.`;
-              await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', connectedMsg);
-              console.log(`${STATUS_LOG_COLOR}${connectedMsg}${STATUS_LOG_RESET}`);
-              connectedLogged = true;
-            }
-          }
+    for (const exKey of Object.keys(EXCHANGES)) {
+      const config = EXCHANGES[exKey];
+      const symbol = config.mapSymbol(baseSym);
 
-          const intervalStart = floorToMinute(START);
-          const intervalEnd = floorToMinute(NOW);
-
-          const rawData = await config.fetch(symbol, config, intervalStart, intervalEnd);
-
-          if (rawData.length > 0) {
-            const processedData = config.process(rawData, baseSym, config);
-            allExchangeData.push(...processedData);  // Collect for this exchange (no source/interval)
-            connectedExchanges.add(config.perpspec);  // Track for symbol-level logging
-          }
-
-          // Track completed symbols per perpspec (keep for compatibility)
-          completedSymbols[config.perpspec].add(baseSym);
-
-          // #4 STATUS: per perpspec completed (keep legacy logging)
-          const expectedCount = perpList.length;
-          if (completedSymbols[config.perpspec].size === expectedCount && !completedPerpspecs.has(config.perpspec)) {
-            const completeMsg = `${config.perpspec} backfill complete.`;
-            await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', completeMsg);
-            console.log(`${STATUS_LOG_COLOR}${completeMsg}${STATUS_LOG_RESET}`);
-            completedPerpspecs.add(config.perpspec);
-          }
-
-        } catch (error) {
-          console.error(`❌ [${config.perpspec}] ${baseSym}: ${error.message}`);
-
-          // Determine error code
-          const errorCode = error.response?.status === 429 ? 'RATE_LIMIT' :
-                           error.message.includes('timeout') ? 'TIMEOUT' :
-                           error.message.includes('404') ? 'NOT_FOUND' : 'FETCH_ERROR';
-
-          await apiUtils.logScriptError(
-            dbManager,
-            SCRIPT_NAME,
-            'API',
-            errorCode,
-            `${config.perpspec} error for ${baseSym}: ${error.message}`,
-            { perpspec: config.perpspec, symbol: baseSym }  // Keep perpspec in logs
-          );
-
-          // Log internal error if connection never established
-          if (!connectedPerpspecs.has(config.perpspec)) {
-            await apiUtils.logScriptError(
-              dbManager,
-              SCRIPT_NAME,
-              'INTERNAL',
-              'INSERT_FAILED',
-              `${config.perpspec} failed to establish connection for ${baseSym}`,
-              { perpspec: config.perpspec, symbol: baseSym }
-            );
+      try {
+        if (!connectedPerpspecs.has(config.perpspec)) {
+          connectedPerpspecs.add(config.perpspec);
+          if (connectedPerpspecs.size === perpspecs.length && !connectedLogged) {
+            const connectedMsg = `${perpspecsStr} connected, starting fetch.`;
+            await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', connectedMsg);
+            console.log(`${STATUS_COLOR}🔧 ${connectedMsg}${RESET}`);
+            connectedLogged = true;
           }
         }
-      }
 
-      // Merge all exchange data for this symbol and insert once (unified per ts/symbol/exchange with lsr)
-      if (allExchangeData.length > 0) {
-        await dbManager.insertData(allExchangeData);  // Single call with all LSR data (dbsetup merges to unified rows)
+        const rawData = await config.fetch(symbol, config, START, NOW);
 
-        // #5 STATUS: all perpspecs completed (keep legacy, but add symbol complete log)
-        if (completedPerpspecs.size === perpspecs.length) {
-          stopHeartbeat = true;
-          clearInterval(heartbeatInterval);
-          const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-          const finalMsg = `${SCRIPT_NAME} backfill completed in ${duration}s!`;
-          await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', finalMsg);
-          console.log(`🍐 ${finalMsg}`);
+        if (rawData.length > 0) {
+          const processed = config.process(rawData, baseSym, config);
+          allData.push(...processed);
+          connectedExchanges.add(config.perpspec);
         }
 
-        // New: Log per-symbol completion
-        const symbolCompleteMsg = `Symbol ${baseSym} LSR backfill complete (${connectedExchanges.size}/3 exchanges).`;
-        await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', symbolCompleteMsg);
-        console.log(`${STATUS_LOG_COLOR}${symbolCompleteMsg}${STATUS_LOG_RESET}`);
-      } else {
-        console.warn(`⚠️ No LSR data for ${baseSym} across exchanges.`);
-      }
+        completedSymbolsPerPerpspec[config.perpspec].add(baseSym);
 
-    })  // End per-symbol async task
-  );  // End map
+        const expectedCount = perpList.length;
+        if (completedSymbolsPerPerpspec[config.perpspec].size === expectedCount && !completedPerpspecs.has(config.perpspec)) {
+          const completeMsg = `${config.perpspec} backfill complete.`;
+          await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', completeMsg);
+          console.log(`${STATUS_COLOR}🔧 ${completeMsg}${RESET}`);
+          completedPerpspecs.add(config.perpspec);
+        }
+      } catch (err) {
+        console.error(`❌ [${config.perpspec}] ${baseSym}: ${err.message}`);
+        const errorCode = err.response?.status === 429 ? 'RATE_LIMIT' :
+          err.message.includes('timeout') ? 'TIMEOUT' :
+          err.message.includes('404') ? 'NOT_FOUND' : 'FETCH_ERROR';
+        await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'API', errorCode, `${config.perpspec} error for ${baseSym}: ${err.message}`, { perpspec: config.perpspec, symbol: baseSym });
+        if (!connectedPerpspecs.has(config.perpspec)) {
+          await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'INTERNAL', 'INSERT_FAILED', `${config.perpspec} failed to establish connection for ${baseSym}`, { perpspec: config.perpspec, symbol: baseSym });
+        }
+      }
+    }
+
+    if (allData.length > 0) {
+      await dbManager.insertBackfillData(allData);
+    } else {
+      console.warn(`⚠️ No LSR data for ${baseSym} across exchanges.`);
+    }
+  })());
 
   await Promise.all(promises);
 
-  // No other status logs here per instructions
+  clearInterval(heartbeatInterval);
 
+  // Single completion log only
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-  console.log(`\n🎉 🥭 All Long/Short Ratio backfills completed in ${duration}s!`);
+  const finalMsg = `⏱️  ${SCRIPT_NAME} backfill completed in ${duration}s!`;
+  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', finalMsg);
+  console.log(finalMsg);
 }
 
-// ============================================================================
-// MODULE ENTRY POINT
-// ============================================================================
+// ... rest of existing code ...
+
 
 if (require.main === module) {
   backfill()
-    .then(() => {
-      // console.log('✅ LSR backfill script completed successfully');
-      process.exit(0);
-    })
+    .then(() => process.exit(0))
     .catch(err => {
       console.error('💥 LSR backfill script failed:', err);
       process.exit(1);
@@ -511,3 +454,5 @@ if (require.main === module) {
 }
 
 module.exports = { backfill };
+
+

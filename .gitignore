@@ -5,11 +5,8 @@
 archive/
 node_modules/
 save/
-b-weight.js
 .binance-weight.json
 package-lock.json
-backteser/
-obacktester/
-tests/
+jsconfig.json
 
 

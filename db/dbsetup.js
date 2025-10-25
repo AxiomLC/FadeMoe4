@@ -1,15 +1,14 @@
-// db/dbsetup.js 15 Oct 2025
+// db/dbsetup.js 24 Oct 2025
 // ============================================================================
-// DATABASE SETUP & MANAGER
-// Handles all PostgreSQL + TimescaleDB operations for perpetual futures data
+// DATABASE SETUP & MANAGER  pool max=50 supports parallel without queueing. adds a insertWithRetry helper for 
+// deadlock resilience (retry 3x PG code 40P01 with backoff) optimizes insertBackfillData with 100k-row chunking,
+// Unified upsert: insertData for -c.js (partial DO UPDATE with COALESCE/append perpspec)
+// insertBackfillData for -h.js (partial DO UPDATE with COALESCE; additive for historical fills)
 // ============================================================================
 const { Pool } = require('pg');
 const format = require('pg-format');
 require('dotenv').config();
 
-// ============================================================================
-// USER CONFIGURATION
-// ============================================================================
 const DB_RETENTION_DAYS = 10; // Must match calc-metrics.js
 
 // ============================================================================
@@ -17,21 +16,53 @@ const DB_RETENTION_DAYS = 10; // Must match calc-metrics.js
 // ============================================================================
 class DatabaseManager {
   constructor() {
+    // UPDATED: Validate env before Pool (throw if missing - fixes undefined pool)
+    const requiredEnv = ['DB_HOST', 'DB_PORT', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
+    for (const key of requiredEnv) {
+      if (!process.env[key]) {
+        throw new Error(`Missing env var: ${key} (check .env file)`);
+      }
+    }
+    console.log('DB env validated'); // NEW: Log for debug (remove if noisy)
+
     this.pool = new Pool({
       host: process.env.DB_HOST,
       port: process.env.DB_PORT,
       user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
+      max: parseInt(process.env.DB_POOL_MAX) || 50, // Tunable via env
+      connectionTimeoutMillis: 5000,
+      idleTimeoutMillis: 30000
     });
+
+    // NEW: Error handler for pool (logs issues without crashing)
+    this.pool.on('error', (err) => console.error('Pool error:', err));
+  }
+
+  // Generic query method for custom SQL (reusable by scripts) (UPDATED: Pool guard)
+  async query(sql, params = []) {
+    if (!this.pool) {
+      throw new Error('DB pool not initialized - run initialize() or check env');
+    }
+    return await this.pool.query(sql, params);
+  }
+
+  // Graceful shutdown
+  async close() {
+    if (this.pool) await this.pool.end();
   }
 
   // --------------------------------------------------------------------------
-  // INITIALIZATION
+  // INITIALIZATION (UPDATED: Optional noDrop param for production/backfill)
   // --------------------------------------------------------------------------
-  async initialize() {
+  async initialize(noDrop = false) { // NEW: Param to skip drops (default false for CLI setup)
     console.log('⚙️ Setting up database...');
-    await this.dropExistingTables();
+    if (!noDrop) { // UPDATED: Conditional drop (skip for backfill/master-api)
+      await this.dropExistingTables();
+    } else {
+      console.log('  - Skipping drops (noDrop mode)'); // NEW: Log for backfill
+    }
     await this.enableExtensions();
     await this.createCoreTables();
     await this.insertFixedPerpspecSchemas();
@@ -100,66 +131,53 @@ class DatabaseManager {
       await this.pool.query(`SELECT create_hypertable('perp_data', 'ts', if_not_exists => TRUE)`);
       console.log('  - Created table: perp_data');
 
-      // ===== 19 OCt Add indexes for filtering by symbol and exchange
+      // Indexes for filtering by symbol and exchange
       await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_perp_data_symbol ON perp_data (symbol)`);
       await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_perp_data_exchange ON perp_data (exchange)`);
       console.log('  - Created indexes on perp_data (symbol, exchange)');
 
-      // perp_metrics: Includes exchange column in PK; % change columns for 1m/5m/10m windows
-      await this.pool.query(
-        `CREATE TABLE IF NOT EXISTS perp_metrics (
-          ts BIGINT NOT NULL,
-          symbol TEXT NOT NULL,
-          exchange TEXT NOT NULL,
-          window_sizes SMALLINT[] DEFAULT '{1,5,10}',
-          o NUMERIC(20,8), h NUMERIC(20,8), l NUMERIC(20,8), c NUMERIC(20,8),
-          v NUMERIC(20,8), oi NUMERIC(20,8), pfr NUMERIC(20,8), lsr NUMERIC(20,8),
-          rsi1 NUMERIC(10,4), rsi60 NUMERIC(10,4),
-          tbv NUMERIC(20,8), tsv NUMERIC(20,8),
-          lqside VARCHAR(10), lqprice NUMERIC(20,8), lqqty NUMERIC(20,8),
 
-          -- % change columns (1m/5m/10m)
-          c_chg_1m NUMERIC(6,4), v_chg_1m NUMERIC(6,4), oi_chg_1m NUMERIC(6,4),
-          pfr_chg_1m NUMERIC(6,4), lsr_chg_1m NUMERIC(6,4),
-          rsi1_chg_1m NUMERIC(6,4), rsi60_chg_1m NUMERIC(6,4),
-          tbv_chg_1m NUMERIC(6,4), tsv_chg_1m NUMERIC(6,4),
-          lqside_chg_1m VARCHAR(10), lqprice_chg_1m NUMERIC(6,4), lqqty_chg_1m NUMERIC(6,4),
+// perp_metrics: Includes exchange in PK; % change columns for 1m/5m/10m windows
+await this.pool.query(
+  `CREATE TABLE IF NOT EXISTS perp_metrics (
+    ts BIGINT NOT NULL,
+    symbol TEXT NOT NULL,
+    exchange TEXT NOT NULL,
+    o NUMERIC(20,8), h NUMERIC(20,8), l NUMERIC(20,8), c NUMERIC(20,8),
+    v NUMERIC(20,8), oi NUMERIC(20,8), pfr NUMERIC(20,8), lsr NUMERIC(20,8),
+    rsi1 NUMERIC(10,4), rsi60 NUMERIC(10,4),
+    tbv NUMERIC(20,8), tsv NUMERIC(20,8),
+    lqside VARCHAR(10), lqprice NUMERIC(20,8), lqqty NUMERIC(20,8),
 
-          c_chg_5m NUMERIC(6,4), v_chg_5m NUMERIC(6,4), oi_chg_5m NUMERIC(6,4),
-          pfr_chg_5m NUMERIC(6,4), lsr_chg_5m NUMERIC(6,4),
-          rsi1_chg_5m NUMERIC(6,4), rsi60_chg_5m NUMERIC(6,4),
-          tbv_chg_5m NUMERIC(6,4), tsv_chg_5m NUMERIC(6,4),
-          lqside_chg_5m VARCHAR(10), lqprice_chg_5m NUMERIC(6,4), lqqty_chg_5m NUMERIC(6,4),
-          
-          c_chg_10m NUMERIC(6,4), v_chg_10m NUMERIC(6,4), oi_chg_10m NUMERIC(6,4),
-          pfr_chg_10m NUMERIC(6,4),
-          lsr_chg_10m NUMERIC(6,4), rsi1_chg_10m NUMERIC(6,4), rsi60_chg_10m NUMERIC(6,4),
-          tbv_chg_10m NUMERIC(6,4), tsv_chg_10m NUMERIC(6,4),
-          lqside_chg_10m VARCHAR(10), lqprice_chg_10m NUMERIC(6,4), lqqty_chg_10m NUMERIC(6,4),
-          PRIMARY KEY (ts, symbol, exchange)
-        )`
-      );
+    -- % change columns (1m/5m/10m) - NUMERIC(7,3) for range ±9999.999%
+    c_chg_1m NUMERIC(7,3), v_chg_1m NUMERIC(7,3), oi_chg_1m NUMERIC(7,3),
+    pfr_chg_1m NUMERIC(7,3), lsr_chg_1m NUMERIC(7,3),
+    rsi1_chg_1m NUMERIC(7,3), rsi60_chg_1m NUMERIC(7,3),
+    tbv_chg_1m NUMERIC(7,3), tsv_chg_1m NUMERIC(7,3),
+    lqside_chg_1m VARCHAR(10), lqprice_chg_1m NUMERIC(7,3), lqqty_chg_1m NUMERIC(7,3),
+
+    c_chg_5m NUMERIC(7,3), v_chg_5m NUMERIC(7,3), oi_chg_5m NUMERIC(7,3),
+    pfr_chg_5m NUMERIC(7,3), lsr_chg_5m NUMERIC(7,3),
+    rsi1_chg_5m NUMERIC(7,3), rsi60_chg_5m NUMERIC(7,3),
+    tbv_chg_5m NUMERIC(7,3), tsv_chg_5m NUMERIC(7,3),
+    lqside_chg_5m VARCHAR(10), lqprice_chg_5m NUMERIC(7,3), lqqty_chg_5m NUMERIC(7,3),
+    
+    c_chg_10m NUMERIC(7,3), v_chg_10m NUMERIC(7,3), oi_chg_10m NUMERIC(7,3),
+    pfr_chg_10m NUMERIC(7,3), lsr_chg_10m NUMERIC(7,3), 
+    rsi1_chg_10m NUMERIC(7,3), rsi60_chg_10m NUMERIC(7,3),
+    tbv_chg_10m NUMERIC(7,3), tsv_chg_10m NUMERIC(7,3),
+    lqside_chg_10m VARCHAR(10), lqprice_chg_10m NUMERIC(7,3), lqqty_chg_10m NUMERIC(7,3),
+    PRIMARY KEY (ts, symbol, exchange)
+  )`
+);
       await this.pool.query(`SELECT create_hypertable('perp_metrics', 'ts', if_not_exists => TRUE)`);
       console.log('  - Created table: perp_metrics');
 
-      //************************************************************************* */
-      // Indexes for performance (added 18 Oct)
-      await this.pool.query(`
-        CREATE INDEX IF NOT EXISTS idx_pfr_chg_5m 
-        ON perp_metrics(pfr_chg_5m);
-      `);
-      await this.pool.query(`
-        CREATE INDEX IF NOT EXISTS idx_oi_chg_5m 
-        ON perp_metrics(oi_chg_5m);
-      `);
-      await this.pool.query(`
-        CREATE INDEX IF NOT EXISTS idx_v_chg_10m 
-        ON perp_metrics(v_chg_10m);
-      `);
+      // Indexes for performance
+      await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_pfr_chg_5m ON perp_metrics(pfr_chg_5m)`);
+      await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_oi_chg_5m ON perp_metrics(oi_chg_5m)`);
+      await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_v_chg_10m ON perp_metrics(v_chg_10m)`);
       console.log('  - Created indexes on perp_metrics');
-
-
-      //=======================================================
 
       // perp_status: Unchanged
       await this.pool.query(`
@@ -189,7 +207,7 @@ class DatabaseManager {
       `);
       console.log('  - Created table: perp_errors');
 
-      // perpspec_schema: Unchanged (legacy for UI if needed)
+      // perpspec_schema: Legacy for UI (updated to unified fields; no source/interval)
       await this.pool.query(`
         CREATE TABLE IF NOT EXISTS perpspec_schema (
           perpspec_name TEXT PRIMARY KEY,
@@ -200,29 +218,27 @@ class DatabaseManager {
       console.log('  - Created table: perpspec_schema');
     } catch (error) {
       console.error('  - Error in createCoreTables:', error.message);
-      throw error;  // Re-throw to fail initialization
+      throw error;
     }
   }
 
   // --------------------------------------------------------------------------
-  // SCHEMA REGISTRY
+  // SCHEMA REGISTRY (Updated: Removed deprecated source/interval fields)
   // --------------------------------------------------------------------------
   async insertFixedPerpspecSchemas() {
-    const perpspecs = [
-      'bin', 'byb', 'okx'
-    ];
+    const perpspecs = ['bin', 'byb', 'okx'];
     const types = ['ohlcv', 'oi', 'pfr', 'lsr', 'tv', 'lq'];
 
     const schemas = [];
     for (const p of perpspecs) {
-      schemas.push({ name: `${p}-ohlcv`, fields: ['ts','symbol','source','perpspec','interval','o','h','l','c','v'] });
-      schemas.push({ name: `${p}-oi`, fields: ['ts','symbol','source','perpspec','interval','oi'] });
-      schemas.push({ name: `${p}-pfr`, fields: ['ts','symbol','source','perpspec','interval','pfr'] });
-      schemas.push({ name: `${p}-lsr`, fields: ['ts','symbol','source','perpspec','interval','lsr'] });
-      schemas.push({ name: `${p}-tv`, fields: ['ts','symbol','source','perpspec','interval','tbv','tsv'] });
-      schemas.push({ name: `${p}-lq`, fields: ['ts','symbol','source','perpspec','interval','lqside','lqprice','lqqty'] });
+      schemas.push({ name: `${p}-ohlcv`, fields: ['ts', 'symbol', 'exchange', 'o', 'h', 'l', 'c', 'v'] });
+      schemas.push({ name: `${p}-oi`, fields: ['ts', 'symbol', 'exchange', 'oi'] });
+      schemas.push({ name: `${p}-pfr`, fields: ['ts', 'symbol', 'exchange', 'pfr'] });
+      schemas.push({ name: `${p}-lsr`, fields: ['ts', 'symbol', 'exchange', 'lsr'] });
+      schemas.push({ name: `${p}-tv`, fields: ['ts', 'symbol', 'exchange', 'tbv', 'tsv'] });
+      schemas.push({ name: `${p}-lq`, fields: ['ts', 'symbol', 'exchange', 'lqside', 'lqprice', 'lqqty'] });
     }
-    schemas.push({ name: 'bin-rsi', fields: ['ts','symbol','source','perpspec','interval','rsi1','rsi60'] }); // RSI changed to bin-rsi 18 Oct
+    schemas.push({ name: 'bin-rsi', fields: ['ts', 'symbol', 'exchange', 'rsi1', 'rsi60'] }); // Unified: no source/interval
 
     for (const schema of schemas) {
       await this.pool.query(
@@ -239,130 +255,225 @@ class DatabaseManager {
   // --------------------------------------------------------------------------
   // RETENTION POLICIES
   // --------------------------------------------------------------------------
-  async setupRetentionPolicies() {
-    try {
-      await this.pool.query(`SELECT remove_retention_policy('perp_data')`);
-      await this.pool.query(`SELECT remove_retention_policy('perp_metrics')`);
-      await this.pool.query(`SELECT add_retention_policy('perp_data', INTERVAL '${DB_RETENTION_DAYS} days')`);
-      await this.pool.query(`SELECT add_retention_policy('perp_metrics', INTERVAL '${DB_RETENTION_DAYS} days')`);
-      console.log(`  - Retention set to ${DB_RETENTION_DAYS} days`);
-    } catch (err) {
-      console.error(`  - Error setting retention: ${err.message}`);
-    }
-  }
+async setupRetentionPolicies() {
+  try {
+    // Create integer_now function for BIGINT timestamps (milliseconds)
+    await this.pool.query(`
+      CREATE OR REPLACE FUNCTION integer_now_ms() RETURNS BIGINT LANGUAGE SQL STABLE AS $$
+        SELECT CAST(EXTRACT(EPOCH FROM NOW()) * 1000 AS BIGINT);
+      $$
+    `);
+    console.log('  - Created integer_now_ms() function');
 
+    // Set integer_now function for hypertables
+    await this.pool.query(`SELECT set_integer_now_func('perp_data', 'integer_now_ms')`);
+    await this.pool.query(`SELECT set_integer_now_func('perp_metrics', 'integer_now_ms')`);
+    console.log('  - Set integer_now function for hypertables');
+
+    // Remove existing policies (ignore if not found)
+    try { await this.pool.query(`SELECT remove_retention_policy('perp_data')`); } catch (e) { /* ignore */ }
+    try { await this.pool.query(`SELECT remove_retention_policy('perp_metrics')`); } catch (e) { /* ignore */ }
+    
+    // Add retention policies (10 days in milliseconds)
+    const retentionMs = DB_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    await this.pool.query(`SELECT add_retention_policy('perp_data', drop_after => ${retentionMs})`);
+    await this.pool.query(`SELECT add_retention_policy('perp_metrics', drop_after => ${retentionMs})`);
+    console.log(`  - Retention set to ${DB_RETENTION_DAYS} days (${retentionMs}ms)`);
+  } catch (err) {
+    console.error(`  - Error setting retention: ${err.message}`);
+  }
+}
   // --------------------------------------------------------------------------
   // DATA OPERATIONS
   // --------------------------------------------------------------------------
-  // Updated to merge perpspec data into unified rows per (ts, symbol, exchange); keep perpspec for frontend
-  async insertData(allRawData) {  // Now takes all perpspec data at once (e.g., from API batch)
-  if (!Array.isArray(allRawData) || allRawData.length === 0) return { rowCount: 0 };
+  // Shared merge logic: Merges allRawData into formatted values array
+  // appendPerpspec: If true (for -c.js), unique-append to perpspec; else set to batch's perpspec (for -h.js)
+  async _mergeRawData(allRawData, appendPerpspec = false) {
+    if (!Array.isArray(allRawData) || allRawData.length === 0) return [];
 
-  // Helper to extract exchange from perpspec (add if not present)
-  function getExchangeFromPerpspec(perpspec) {
-    if (perpspec.startsWith('bin-')) return 'bin';
-    if (perpspec.startsWith('byb-')) return 'byb';
-    if (perpspec.startsWith('okx-')) return 'okx';
-    return null;
-  }
-
-  // Merge into unified rows
-  const merged = new Map();  // Key: `${ts}_${symbol}_${exchange}`
-
-  for (const record of allRawData) {
-    const ts = record.ts;
-    const symbol = record.symbol;
-    let perpspec = record.perpspec;  // Keep for frontend
-    const exchange = getExchangeFromPerpspec(perpspec);
-    if (!exchange) continue;  // Skip invalid
-    const key = `${ts}_${symbol}_${exchange}`;
-
-    // Ensure perpspec is a JSONB array (e.g., if single string like 'bin-ohlcv', wrap as ['bin-ohlcv'])
-    if (typeof perpspec === 'string') {
-      perpspec = [perpspec];  // Align with README: array of full perpspec names
+    function getExchangeFromPerpspec(perpspec) {
+      if (perpspec.startsWith('bin-')) return 'bin';
+      if (perpspec.startsWith('byb-')) return 'byb';
+      if (perpspec.startsWith('okx-')) return 'okx';
+      return null;
     }
 
-    if (!merged.has(key)) {
-      merged.set(key, {
-        ts,
-        symbol,
-        exchange,
-        perpspec: perpspec || ['unknown'],  // Populate perpspec (e.g., default to input or 'unified')
-        o: null, h: null, l: null, c: null, v: null,
-        oi: null, pfr: null, lsr: null,
-        rsi1: null, rsi60: null,
-        tbv: null, tsv: null,
-        lqside: null, lqprice: null, lqqty: null,
-        notes: record.notes || null  // Optional notes from API (e.g., 'farcaster')
-      });
-    }
-//=============================================================
-    const row = merged.get(key);
-    // Populate based on perpspec (use original record.perpspec string for substring checks)
-    if (record.perpspec && record.perpspec.includes('ohlcv')) {
-      row.o = record.o; row.h = record.h; row.l = record.l;
-      row.c = record.c; row.v = record.v;
-      row.perpspec = perpspec;  // Prioritize ohlcv as default perpspec for unified row (wrapped array)
-    }
-    if (record.perpspec && record.perpspec.includes('oi')) row.oi = record.oi;
-    if (record.perpspec && record.perpspec.includes('pfr')) row.pfr = record.pfr;
-    if (record.perpspec && record.perpspec.includes('lsr')) row.lsr = record.lsr;
-    if (record.perpspec && record.perpspec.includes('rsi')) { row.rsi1 = record.rsi1; row.rsi60 = record.rsi60; }
-    if (record.perpspec && record.perpspec.includes('tv')) { row.tbv = record.tbv; row.tsv = record.tsv; }
-    if (record.perpspec && record.perpspec.includes('lq')) {
-      row.lqside = record.lqside; row.lqprice = record.lqprice; row.lqqty = record.lqqty;
-    }
-    // Update notes if provided
-    if (record.notes) row.notes = record.notes;
-  }
-//=================================================================
-  // Upsert merged rows (include perpspec in fields/values)
-  const mergedArray = Array.from(merged.values());
-  if (mergedArray.length === 0) return { rowCount: 0 };
+    const merged = new Map(); // Key: `${ts}_${symbol}_${exchange}`
 
-  const fields = ['ts', 'symbol', 'exchange', 'perpspec', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lqside', 'lqprice', 'lqqty', 'notes'];
+    for (const record of allRawData) {
+      const ts = record.ts;
+      const symbol = record.symbol;
+      let perpspec = record.perpspec;
+      const exchange = getExchangeFromPerpspec(perpspec);
+      if (!exchange) continue;
+      const key = `${ts}_${symbol}_${exchange}`;
 
-  // FIX: Explicitly format values for pg-format %L: ts as string, perpspec as JSON string, others as-is/null
-  const values = mergedArray.map(row => {
-    return fields.map(f => {
+      if (typeof perpspec === 'string') perpspec = [perpspec];
+      else if (!Array.isArray(perpspec)) perpspec = ['unknown'];
+
+      if (!merged.has(key)) {
+        merged.set(key, {
+          ts, symbol, exchange, perpspec,
+          o: null, h: null, l: null, c: null, v: null,
+          oi: null, pfr: null, lsr: null,
+          rsi1: null, rsi60: null,
+          tbv: null, tsv: null,
+          lqside: null, lqprice: null, lqqty: null,
+          notes: record.notes || null
+        });
+      }
+
+      const row = merged.get(key);
+      // Populate fields based on perpspec
+      if (record.perpspec?.includes('ohlcv')) {
+        row.o = record.o; row.h = record.h; row.l = record.l;
+        row.c = record.c; row.v = record.v;
+        if (!appendPerpspec) row.perpspec = perpspec; // For backfill: Set to this batch
+      }
+      if (record.perpspec?.includes('oi')) row.oi = record.oi;
+      if (record.perpspec?.includes('pfr')) row.pfr = record.pfr;
+      if (record.perpspec?.includes('lsr')) row.lsr = record.lsr;
+      if (record.perpspec?.includes('rsi')) { row.rsi1 = record.rsi1; row.rsi60 = record.rsi60; }
+      if (record.perpspec?.includes('tv')) { row.tbv = record.tbv; row.tsv = record.tsv; }
+      if (record.perpspec?.includes('lq')) {
+        row.lqside = record.lqside; row.lqprice = record.lqprice; row.lqqty = record.lqqty;
+      }
+      if (record.notes) row.notes = record.notes;
+      // For continuous: Unique append to perpspec
+      if (appendPerpspec) {
+        row.perpspec = [...new Set([...(row.perpspec || []), ...perpspec])];
+      }
+    }
+
+    const mergedArray = Array.from(merged.values());
+    if (mergedArray.length === 0) return [];
+
+    const fields = ['ts', 'symbol', 'exchange', 'perpspec', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lqside', 'lqprice', 'lqqty', 'notes'];
+
+    return mergedArray.map(row => fields.map(f => {
       let val = row[f] ?? null;
-      if (f === 'ts' && typeof val === 'bigint') {
-        val = val.toString();  // BigInt → string for BIGINT column (pg-format quotes it)
-      } else if (f === 'perpspec' && Array.isArray(val)) {
-        val = JSON.stringify(val);  // Array → '"[\"bin-ohlcv\"]" ' for JSONB (pg-format quotes outer)
-      }
-      // NUMERIC fields: Ensure numbers are not NaN/null
-      if (['o','h','l','c','v','oi','pfr','lsr','rsi1','rsi60','tbv','tsv','lqprice','lqqty'].includes(f) && typeof val === 'number' && isNaN(val)) {
-        val = null;
-      }
+      if (f === 'ts' && typeof val === 'bigint') val = val.toString();
+      else if (f === 'perpspec' && Array.isArray(val)) val = JSON.stringify(val);
+      if (['o','h','l','c','v','oi','pfr','lsr','rsi1','rsi60','tbv','tsv','lqprice','lqqty'].includes(f) && typeof val === 'number' && isNaN(val)) val = null;
       return val;
-    });
-  });
-
-  const query = format(
-    `INSERT INTO perp_data (${fields.join(', ')})
-     VALUES %L
-     ON CONFLICT (ts, symbol, exchange) DO UPDATE SET
-       perpspec = EXCLUDED.perpspec, o = EXCLUDED.o, h = EXCLUDED.h, l = EXCLUDED.l, c = EXCLUDED.c, v = EXCLUDED.v,
-       oi = EXCLUDED.oi, pfr = EXCLUDED.pfr, lsr = EXCLUDED.lsr,
-       rsi1 = EXCLUDED.rsi1, rsi60 = EXCLUDED.rsi60,
-       tbv = EXCLUDED.tbv, tsv = EXCLUDED.tsv,
-       lqside = EXCLUDED.lqside, lqprice = EXCLUDED.lqprice, lqqty = EXCLUDED.lqqty,
-       notes = COALESCE(EXCLUDED.notes, perp_data.notes)`,  // Preserve notes
-    values
-  );
-
-  // TEMP DEBUG: Log first row's formatted values (remove after testing)
-  if (values.length > 0) {
-    console.log(`[DB INSERT DEBUG] First row: ts='${values[0][0]}', perpspec='${values[0][3]}', o=${values[0][4]}, exchange='${values[0][2]}'`);
+    }));
   }
 
-  const result = await this.pool.query(query);
-  console.log(`[DB INSERT] Successfully inserted/updated ${result.rowCount} rows from ${mergedArray.length} prepared`);
-  return result;
-}
+  // New: Private helper for deadlock retries (PG code 40P01) on any query
+  async insertWithRetry(query, maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await this.pool.query(query);
+      } catch (error) {
+        if (error.code === '40P01' && attempt < maxRetries) {  // Deadlock
+          console.warn(`Deadlock on query (attempt ${attempt}/${maxRetries}); retrying in ${attempt}s...`);
+          await new Promise(r => setTimeout(r, 1000 * attempt));  // Backoff
+          continue;
+        }
+        throw error;  // Re-throw others
+      }
+    }
+  }
 
-  //++++++++++++++++++++++++++++++==================================================
+  // For -c.js continuous/real-time: Partial update (COALESCE preserves existing; append perpspec)
+  // PK fields (ts/symbol/exchange) immutable
+  async insertData(allRawData) {
+    const values = await this._mergeRawData(allRawData, true); // Append perpspec
+    if (values.length === 0) return { rowCount: 0 };
+
+    const fields = ['ts', 'symbol', 'exchange', 'perpspec', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lqside', 'lqprice', 'lqqty', 'notes'];
+
+    const updateClause = `
+      perpspec = COALESCE(perp_data.perpspec, '[]'::jsonb) || EXCLUDED.perpspec,
+      o = COALESCE(EXCLUDED.o, perp_data.o),
+      h = COALESCE(EXCLUDED.h, perp_data.h),
+      l = COALESCE(EXCLUDED.l, perp_data.l),
+      c = COALESCE(EXCLUDED.c, perp_data.c),
+      v = COALESCE(EXCLUDED.v, perp_data.v),
+      oi = COALESCE(EXCLUDED.oi, perp_data.oi),
+      pfr = COALESCE(EXCLUDED.pfr, perp_data.pfr),
+      lsr = COALESCE(EXCLUDED.lsr, perp_data.lsr),
+      rsi1 = COALESCE(EXCLUDED.rsi1, perp_data.rsi1),
+      rsi60 = COALESCE(EXCLUDED.rsi60, perp_data.rsi60),
+      tbv = COALESCE(EXCLUDED.tbv, perp_data.tbv),
+      tsv = COALESCE(EXCLUDED.tsv, perp_data.tsv),
+      lqside = COALESCE(EXCLUDED.lqside, perp_data.lqside),
+      lqprice = COALESCE(EXCLUDED.lqprice, perp_data.lqprice),
+      lqqty = COALESCE(EXCLUDED.lqqty, perp_data.lqqty),
+      notes = COALESCE(EXCLUDED.notes, perp_data.notes)
+    `;
+
+    const query = format(
+      `INSERT INTO perp_data (${fields.join(', ')})
+       VALUES %L
+       ON CONFLICT (ts, symbol, exchange) DO UPDATE SET ${updateClause}`,
+      values
+    );
+
+    const result = await this.insertWithRetry(query);
+    return result;
+  }
+
+  // For -h.js backfill: Partial update (COALESCE preserves existing; set perpspec to batch)
+  // Additive: Adds fields (e.g., LSR adds lsr to OHLCV rows) without skipping
+  async insertBackfillData(allRawData) {
+    const values = await this._mergeRawData(allRawData, false); // No append for backfill
+    if (values.length === 0) return { rowCount: 0 };
+
+    const fields = ['ts', 'symbol', 'exchange', 'perpspec', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lqside', 'lqprice', 'lqqty', 'notes'];
+
+    // Partial update with COALESCE (additive)
+    const updateClause = `
+      perpspec = COALESCE(perp_data.perpspec, '[]'::jsonb) || EXCLUDED.perpspec,
+      o = COALESCE(EXCLUDED.o, perp_data.o),
+      h = COALESCE(EXCLUDED.h, perp_data.h),
+      l = COALESCE(EXCLUDED.l, perp_data.l),
+      c = COALESCE(EXCLUDED.c, perp_data.c),
+      v = COALESCE(EXCLUDED.v, perp_data.v),
+      oi = COALESCE(EXCLUDED.oi, perp_data.oi),
+      pfr = COALESCE(EXCLUDED.pfr, perp_data.pfr),
+      lsr = COALESCE(EXCLUDED.lsr, perp_data.lsr),
+      rsi1 = COALESCE(EXCLUDED.rsi1, perp_data.rsi1),
+      rsi60 = COALESCE(EXCLUDED.rsi60, perp_data.rsi60),
+      tbv = COALESCE(EXCLUDED.tbv, perp_data.tbv),
+      tsv = COALESCE(EXCLUDED.tsv, perp_data.tsv),
+      lqside = COALESCE(EXCLUDED.lqside, perp_data.lqside),
+      lqprice = COALESCE(EXCLUDED.lqprice, perp_data.lqprice),
+      lqqty = COALESCE(EXCLUDED.lqqty, perp_data.lqqty),
+      notes = COALESCE(EXCLUDED.notes, perp_data.notes)
+    `;
+
+    let totalRowCount = 0;
+    // Insert in chunks of 100k (big loop for high flow; retry per chunk)
+    const chunkSize = 100000;
+    for (let i = 0; i < values.length; i += chunkSize) {
+      const chunk = values.slice(i, i + chunkSize);
+      const chunkQuery = format(
+        `INSERT INTO perp_data (${fields.join(', ')})
+         VALUES %L
+         ON CONFLICT (ts, symbol, exchange) DO UPDATE SET ${updateClause}`,
+        chunk
+      );
+      try {
+        const chunkResult = await this.insertWithRetry(chunkQuery);
+        totalRowCount += chunkResult.rowCount || chunk.length;
+        await new Promise(r => setTimeout(r, 50));  // Tiny pause (reduces burst, no slowdown)
+      } catch (error) {
+        // Per-chunk error catch: Log for perpspec/symbol (no full abort, continue other chunks/symbols)
+        console.error(`Insert failed for chunk [${i}-${i + chunk.length}] (perpspec impact): ${error.message}`);
+        await this.logError('dbsetup', 'DB', 'INSERT_CHUNK_FAIL', `Chunk insert failed: ${error.message}`, {
+          chunkStart: i,
+          chunkSize: chunk.length,
+          errorCode: error.code || 'UNKNOWN'
+        });
+        // Continue to next chunk (doesn't halt script/backfill)
+      }
+    }
+
+    return { rowCount: totalRowCount };
+  }
+
+  // insertMetrics: Unchanged (full update for metrics)
   async insertMetrics(metricsArray) {
     if (!Array.isArray(metricsArray) || metricsArray.length === 0) return { rowCount: 0 };
     const cols = Object.keys(metricsArray[0]);
@@ -379,49 +490,46 @@ class DatabaseManager {
     return await this.pool.query(query);
   }
 
-  // Updated query for unified schema (include perpspec for frontend, no interval/source)
+  // queryPerpData: Unified schema query (no interval/source filter)
   async queryPerpData(exchange, symbol, startTs, endTs) {
     if (!exchange || !symbol || startTs == null || endTs == null) {
-        console.warn(`Invalid query parameters for queryPerpData: exchange=${exchange}, symbol=${symbol}, startTs=${startTs}, endTs=${endTs}`);
-        return [];
+      console.warn(`Invalid query parameters for queryPerpData: exchange=${exchange}, symbol=${symbol}, startTs=${startTs}, endTs=${endTs}`);
+      return [];
     }
 
     const query = `
-        SELECT ts, symbol, exchange, perpspec, o, h, l, c, v, oi, pfr, lsr, rsi1, rsi60, tbv, tsv, lqside, lqprice, lqqty, notes
-        FROM perp_data
-        WHERE exchange = $1
-          AND symbol = $2
-          AND ts >= $3
-          AND ts < $4
-        ORDER BY ts ASC
+      SELECT ts, symbol, exchange, perpspec, o, h, l, c, v, oi, pfr, lsr, rsi1, rsi60, tbv, tsv, lqside, lqprice, lqqty, notes
+      FROM perp_data
+      WHERE exchange = $1 AND symbol = $2 AND ts >= $3 AND ts < $4
+      ORDER BY ts ASC
     `;
 
     try {
-        const result = await this.pool.query(query, [exchange, symbol, BigInt(startTs), BigInt(endTs)]);
-        return result.rows.map(row => ({
-            ...row,
-            ts: Number(row.ts),
-            v: row.v ? Number(row.v) : null,
-            c: row.c ? Number(row.c) : null,
-            o: row.o ? Number(row.o) : null,
-            h: row.h ? Number(row.h) : null,
-            l: row.l ? Number(row.l) : null,
-            oi: row.oi ? Number(row.oi) : null,
-            pfr: row.pfr ? Number(row.pfr) : null,
-            lsr: row.lsr ? Number(row.lsr) : null,
-            rsi1: row.rsi1 ? Number(row.rsi1) : null,
-            rsi60: row.rsi60 ? Number(row.rsi60) : null,
-            tbv: row.tbv ? Number(row.tbv) : null,
-            tsv: row.tsv ? Number(row.tsv) : null,
-            lqside: row.lqside ? String(row.lqside) : null,
-            lqprice: row.lqprice ? Number(row.lqprice) : null,
-            lqqty: row.lqqty ? Number(row.lqqty) : null,
-            notes: row.notes || null,
-            perpspec: row.perpspec || null  // Include for frontend
-        }));
+      const result = await this.pool.query(query, [exchange, symbol, BigInt(startTs), BigInt(endTs)]);
+      return result.rows.map(row => ({
+        ...row,
+        ts: Number(row.ts),
+        v: row.v ? Number(row.v) : null,
+        c: row.c ? Number(row.c) : null,
+        o: row.o ? Number(row.o) : null,
+        h: row.h ? Number(row.h) : null,
+        l: row.l ? Number(row.l) : null,
+        oi: row.oi ? Number(row.oi) : null,
+        pfr: row.pfr ? Number(row.pfr) : null,
+        lsr: row.lsr ? Number(row.lsr) : null,
+        rsi1: row.rsi1 ? Number(row.rsi1) : null,
+        rsi60: row.rsi60 ? Number(row.rsi60) : null,
+        tbv: row.tbv ? Number(row.tbv) : null,
+        tsv: row.tsv ? Number(row.tsv) : null,
+        lqside: row.lqside ? String(row.lqside) : null,
+        lqprice: row.lqprice ? Number(row.lqprice) : null,
+        lqqty: row.lqqty ? Number(row.lqqty) : null,
+        notes: row.notes || null,
+        perpspec: row.perpspec || null
+      }));
     } catch (error) {
-        console.error(`Error querying perp_data for exchange='${exchange}', symbol='${symbol}':`, error.message);
-        return [];
+      console.error(`Error querying perp_data for exchange='${exchange}', symbol='${symbol}':`, error.message);
+      return [];
     }
   }
 
@@ -452,12 +560,12 @@ const dbManager = new DatabaseManager();
 module.exports = dbManager;
 
 // ============================================================================
-// CLI EXECUTION
-// ============================================================================
+// CLI EXECUTION (UPDATED: Explicit noDrop=false for setup)
 if (require.main === module) {
   (async () => {
     try {
-      await dbManager.initialize();
+      await dbManager.initialize(false); // UPDATED: Explicit for CLI (full setup)
+      await dbManager.close(); // Graceful exit
     } catch (err) {
       console.error('❌ Database setup failed:', err);
       process.exit(1);

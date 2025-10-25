@@ -9,7 +9,6 @@ const PORT = process.env.PORT || 3000;
 // ============================================================================
 app.use(express.json());
 app.use(express.static('public'));
-
 // ============================================================================
 // API Endpoints
 // ============================================================================
@@ -65,8 +64,6 @@ app.get('/api/perp_data', async (req, res) => {
             exchange = '',
             params = ''
         } = req.query;
-
-        console.log('Received /api/perp_data query params:', req.query);
 
         const pageNum = parseInt(page) || 1;
         const pageSize = parseInt(limit) || 100;
@@ -126,9 +123,7 @@ let offsetIndex = values.length;        // offset
 let dataQuery = `SELECT ${selectFields} FROM perp_data WHERE 1=1 ${whereClause}
 ORDER BY ts DESC, symbol, exchange
 LIMIT $${limitIndex} OFFSET $${offsetIndex}`;
-
         
-        console.log('Executing SQL:', dataQuery, 'with values:', values);
         const dataResult = await dbManager.pool.query(dataQuery, values);
         
         // Process data - convert BigInt timestamps to numbers
@@ -261,6 +256,8 @@ app.get('/health', (req, res) => {
 // Server Startup
 // ============================================================================
 app.listen(PORT, () => {
-    console.log(`🚀 FadeMoe4 Server running on http://localhost:${PORT}`);
-    console.log(`📊 Database viewer available at http://localhost:${PORT}`);
+    console.log('\x1b[35m%s\x1b[0m',`🪢 FadeMoe Server running: http://localhost:${PORT}`);
+    setInterval(() => {
+    console.log('\x1b[35m%s\x1b[0m',`🪢 FadeMoe DBView at http://localhost:${PORT}`);
+    }, 60000);
 });

@@ -1,10 +1,11 @@
 /* ==========================================
  * all-oi-c.js   (Unified USD Normalization)
  * Continuous Open Interest Polling Script
- * Updated: 14 Oct 2025
+ * Updated: 22 Oct 2025 - Unified Schema
  * ------------------------------------------
  * ✅ OI normalized to USD across exchanges
  * ✅ Bybit 5x1 conversion confirmed accurate
+ * Unified: insertData (partial DO UPDATE); no source/interval
  * ========================================== */
 
 const axios = require('axios');
@@ -35,20 +36,23 @@ const BINANCE_CONTRACT_MULTIPLIERS = {
 const EXCHANGE_CONFIG = {
   BINANCE: {
     PERPSPEC: 'bin-oi',
+    DB_EXCHANGE: 'bin',
     URL: 'https://fapi.binance.com/fapi/v1/openInterest',
-    DB_INTERVAL: '1m',
     mapSymbol: sym => `${sym}USDT`
   },
   BYBIT: {
     PERPSPEC: 'byb-oi',
+    DB_EXCHANGE: 'byb',
     URL: 'https://api.bybit.com/v5/market/open-interest',
-    DB_INTERVAL: '1m',
-    mapSymbol: sym => `${sym}USDT`
+    mapSymbol: sym => {  // Added: Handle meme coins like in 1z-web-ohlcv-c.js (prevents fetch failures)
+      const memeCoins = ['BONK', 'PEPE', 'FLOKI', 'TOSHI'];
+      return memeCoins.includes(sym) ? `1000${sym}USDT` : `${sym}USDT`;
+    }
   },
   OKX: {
     PERPSPEC: 'okx-oi',
+    DB_EXCHANGE: 'okx',
     URL: 'https://www.okx.com/api/v5/public/open-interest',
-    DB_INTERVAL: '1m',
     mapSymbol: sym => `${sym}-USDT-SWAP`
   }
 };
@@ -73,7 +77,7 @@ async function getBinancePrice(symbol) {
 }
 
 /* ==========================================
- * DATA PROCESSING FUNCTIONS
+ * DATA PROCESSING FUNCTIONS (UNIFIED: No source/interval; explicit exchange)
  * ========================================== */
 
 // ---------- Binance (contracts → USD)
@@ -82,30 +86,30 @@ async function processBinanceData(rawData, baseSymbol, config) {
   try {
     const oiContracts = parseFloat(rawData.openInterest);
     const timestampRaw = rawData.time;
-    const timestamp = Math.floor(timestampRaw / 60000) * 60000;
-    if (isNaN(oiContracts)) return null;
+    const timestamp = Math.floor(timestampRaw / 60000) * 60000;  // Standardized 1m floor
+    if (isNaN(oiContracts) || oiContracts <= 0) return null;  // Added: Validate oiContracts
 
     // Determine contract multiplier
     const multiplier = BINANCE_CONTRACT_MULTIPLIERS[baseSymbol] || BINANCE_CONTRACT_MULTIPLIERS.default;
 
     // Attempt to get price from DB, fallback to API
     let price = null;
-    const rows = await dbManager.queryPerpData('bin-ohlcv', baseSymbol, timestamp - 5 * 60 * 1000, timestamp + 5 * 60 * 1000);
+    const rows = await dbManager.queryPerpData(config.DB_EXCHANGE, baseSymbol, timestamp - 5 * 60 * 1000, timestamp + 5 * 60 * 1000);
     if (rows.length > 0) price = rows[rows.length - 1].c;
-    if (!price) price = await getBinancePrice(`${baseSymbol}USDT`);
+    if (!price || isNaN(price) || price <= 0) price = await getBinancePrice(`${baseSymbol}USDT`);  // Added: Validate price
 
     const oiUsd = oiContracts * multiplier * (price || 0);
-    if (!oiUsd) return null;
+    if (isNaN(oiUsd) || oiUsd <= 0) return null;  // Added: Validate final oiUsd
 
     return {
       ts: apiUtils.toMillis(BigInt(timestamp)),
       symbol: baseSymbol,
-      source: perpspec,
-      perpspec,
-      interval: config.DB_INTERVAL,
+      exchange: config.DB_EXCHANGE,
+      perpspec, // String; insertData wraps to array
       oi: oiUsd
     };
   } catch (e) {
+    console.warn(`[bin-oi] Process error for ${baseSymbol}: ${e.message}`);  // Added: Warn on process error
     return null;
   }
 }
@@ -119,7 +123,7 @@ function processBybitData(rawData, baseSymbol, config) {
     const dataPoint = rawData.list[0];
     const oiUsd = parseFloat(dataPoint.openInterest);
     const timestamp = parseInt(dataPoint.timestamp, 10);
-    if (isNaN(oiUsd)) return null;
+    if (isNaN(oiUsd) || oiUsd <= 0) return [];  // Added: Validate oiUsd; return [] for no insert
 
     // floor timestamp to nearest minute, filter future inserts
     const now = Date.now();
@@ -131,17 +135,16 @@ function processBybitData(rawData, baseSymbol, config) {
         expandedRecords.push({
           ts: apiUtils.toMillis(BigInt(ts)),
           symbol: baseSymbol,
-          source: perpspec,
-          perpspec,
-          interval: config.DB_INTERVAL,
+          exchange: config.DB_EXCHANGE,
+          perpspec, // String; insertData wraps
           oi: oiUsd
         });
       }
     }
 
-    return expandedRecords;
+    return expandedRecords.length > 0 ? expandedRecords : [];  // Added: Ensure array
   } catch {
-    return null;
+    return [];  // Added: Return [] on error
   }
 }
 
@@ -150,21 +153,20 @@ function processOkxData(rawData, baseSymbol, config) {
   const perpspec = config.PERPSPEC;
   try {
     const dataPoint = rawData[0];
-    const oiUsd = parseFloat(dataPoint.oiUsd ?? dataPoint.oi);
+    const oiUsd = parseFloat(dataPoint.oiUsd ?? dataPoint.oi);  // Fallback to oi if oiUsd missing
     const timestampRaw = dataPoint.ts;
-    const timestamp = Math.floor(timestampRaw / 60000) * 60000;
-    if (isNaN(oiUsd)) return null;
+    const timestamp = Math.floor(timestampRaw / 60000) * 60000;  // Standardized 1m floor
+    if (isNaN(oiUsd) || oiUsd <= 0) return null;  // Added: Validate oiUsd
 
     return {
       ts: apiUtils.toMillis(BigInt(timestamp)),
       symbol: baseSymbol,
-      source: perpspec,
-      perpspec,
-      interval: config.DB_INTERVAL,
+      exchange: config.DB_EXCHANGE,
+      perpspec, // String; insertData wraps
       oi: oiUsd
     };
   } catch {
-    return null;
+    return null;  // Added: Return null on error
   }
 }
 
@@ -174,21 +176,22 @@ function processOkxData(rawData, baseSymbol, config) {
 async function fetchBinanceOI(symbol, config) {
   const params = { symbol };
   const response = await axios.get(config.URL, { params, timeout: 5000 });
+  if (!response.data || Object.keys(response.data).length === 0) throw new Error(`No data for ${symbol}`);  // Added: Validate response
   return response.data;
 }
 
 async function fetchBybitOI(symbol, config) {
-  const params = { category: 'linear', symbol, intervalTime: '5min', limit: 1 };
+  const params = { category: 'linear', symbol, intervalTime: '5min', limit: 1 };  // Note: API uses 'intervalTime'
   const response = await axios.get(config.URL, { params, timeout: 5000 });
-  if (response.data.result?.list?.length === 0) throw new Error('No data returned from Bybit');
-  return response.data.result;
+  if (!response.data.result?.list?.length) throw new Error(`No data for ${symbol}`);  // Fixed: Check .result.list
+  return response.data.result;  // Return .result
 }
 
-async function fetchOkxOI(instId, config) {
+async function fetchOkxOI(instId, config) {  // Param: instId for OKX convention
   const params = { instId };
   const response = await axios.get(config.URL, { params, timeout: 5000 });
   if (response.data.code !== '0') throw new Error(`OKX API error: ${response.data.msg}`);
-  return response.data.data || [];
+  return response.data.data || [];  // Return .data or []
 }
 
 /* ==========================================
@@ -225,9 +228,10 @@ async function pollSymbolAndExchange(baseSymbol, exchangeConfig) {
       }
     }
 
-    if (!processedData) return;
+    if (!processedData) return;  // Added: Skip if null/empty
     const records = Array.isArray(processedData) ? processedData : [processedData];
-    await dbManager.insertData(perpspec, records);
+    // Insert via insertData (for -c.js: partial DO UPDATE with COALESCE; only oi set, preserves OHLCV/etc.)
+    await dbManager.insertData(records);  // Already array; good
 
     // Log #3: Perpspec 1m pull completion
     completedPulls.get(perpspec).add(baseSymbol);
@@ -241,10 +245,11 @@ async function pollSymbolAndExchange(baseSymbol, exchangeConfig) {
   } catch (err) {
     console.error(`[${perpspec}] Error polling ${baseSymbol}:`, err.message);
     await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'API', 'POLL_ERROR', err.message, {
-      exchange: perpspec.split('-')[0],
+      exchange: exchangeConfig.DB_EXCHANGE,  // Fixed: Use config.DB_EXCHANGE
       symbol: baseSymbol,
       perpspec
     });
+    setTimeout(() => pollSymbolAndExchange(baseSymbol, exchangeConfig), RETRY_INTERVAL);  // Added: Retry on error
   }
 }
 

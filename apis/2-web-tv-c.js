@@ -1,5 +1,5 @@
 /* ==========================================
- * web-tv-c.js   14 Oct 2025
+ * web-tv-c.js   22 Oct 2025 - Unified Schema
  * Real-Time WebSocket Taker Volume Collector
  *
  * MAJOR CHANGE: Switched from 5-minute bucketing to 1-minute real-time processing
@@ -9,6 +9,7 @@
  * - Uses same BIAS_STRENGTH formula as bin-tv-h.js for uniformity
  * - No lag - inserts happen ~1-2 seconds after minute boundary
  *
+ * Unified: insertData (partial DO UPDATE); no source/interval; explicit exchange
  * Streams trade data from Binance, Bybit, and OKX
  * Calculates taker buy/sell volume with price direction bias
  * FIXED: OKX contract normalization - converts sz (contracts) to base tokens via ctVal
@@ -70,25 +71,25 @@ async function loadOkxContracts() {
 
 // ============================================================================
 // EXCHANGE CONFIGURATION
-// Defines WebSocket URLs, perpspec names, symbol mapping, and OHLCV perpspec for biasing
+// Defines WebSocket URLs, perpspec names, symbol mapping, and OHLCV exchange for biasing
 // ============================================================================
 const EXCHANGE_CONFIG = {
   BINANCE: {
     PERPSPEC: 'bin-tv',
-    OHLCV_PERPSPEC: 'bin-ohlcv',  // For v/c weighting
+    OHLCV_EXCHANGE: 'bin',  // For v/c weighting queries
     WS_BASE: 'wss://fstream.binance.com/ws',
     mapSymbol: sym => `${sym.toLowerCase()}usdt`,
     getWsUrl: sym => `wss://fstream.binance.com/ws/${sym.toLowerCase()}usdt@aggTrade`
   },
   BYBIT: {
     PERPSPEC: 'byb-tv',
-    OHLCV_PERPSPEC: 'byb-ohlcv',  // For v/c weighting
+    OHLCV_EXCHANGE: 'byb',  // For v/c weighting queries
     WS_URL: 'wss://stream.bybit.com/v5/public/linear',
     mapSymbol: sym => `${sym}USDT`
   },
   OKX: {
     PERPSPEC: 'okx-tv',
-    OHLCV_PERPSPEC: 'okx-ohlcv',  // For v/c weighting
+    OHLCV_EXCHANGE: 'okx',  // For v/c weighting queries
     WS_URL: 'wss://ws.okx.com:8443/ws/v5/public',
     mapSymbol: sym => `${sym}-USDT-SWAP`
   }
@@ -135,9 +136,9 @@ async function checkAndLogAllConnected() {
   if (!allConnected && connectionStatus['bin-tv'] && 
       connectionStatus['byb-tv'] && connectionStatus['okx-tv']) {
     allConnected = true;
-    const message = 'bin-tv, byb-tv, okx-tv successful connections; fetching.';
+    const message = '🚦 bin-tv, byb-tv, okx-tv successful connections; fetching.';
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', message);
-    console.log(`${STATUS_COLOR}⚖️ ${message}${RESET}`);
+    console.log(`${STATUS_COLOR}${message}${RESET}`);
   }
 }
 
@@ -201,14 +202,14 @@ async function flushBucket(perpspec, baseSymbol) {
   const previousMinuteTs = currentMinuteTs - 60000;  // Previous 1-minute start
   const tbv_total = bucket.tbv_total;
   const tsv_total = bucket.tsv_total;
-  const ohlcvPerpspec = EXCHANGE_CONFIG[Object.keys(EXCHANGE_CONFIG).find(key => 
-    EXCHANGE_CONFIG[key].PERPSPEC === perpspec)].OHLCV_PERPSPEC;
+  const config = EXCHANGE_CONFIG[Object.keys(EXCHANGE_CONFIG).find(key => 
+    EXCHANGE_CONFIG[key].PERPSPEC === perpspec)];
 
   try {
     // Query OHLCV for current and previous minute (need price delta for bias calculation)
     const queryStart = previousMinuteTs;
     const queryEnd = currentMinuteTs + 60000;
-    let ohlcvData = await dbManager.queryPerpData(ohlcvPerpspec, baseSymbol, queryStart, queryEnd);
+    let ohlcvData = await dbManager.queryPerpData(config.OHLCV_EXCHANGE, baseSymbol, queryStart, queryEnd);
 
     // Filter for 1m interval, sort by timestamp
     ohlcvData = ohlcvData
@@ -254,18 +255,17 @@ async function flushBucket(perpspec, baseSymbol) {
       tsv = tsv_total * 0.5;
     }
 
-    // Insert single 1-minute record
-    const record = {
-      ts: apiUtils.toMillis(BigInt(currentMinuteTs)),
-      symbol: baseSymbol,
-      source: perpspec,
-      perpspec: perpspec,
-      interval: '1m',
-      tbv,
-      tsv
-    };
+    // Insert single 1-minute record (unified format)
+  const record = {
+  ts: apiUtils.toMillis(BigInt(currentMinuteTs)),
+  symbol: baseSymbol,
+  exchange: config.OHLCV_EXCHANGE,  // Fixed: Use OHLCV exchange (e.g., 'bin' for bin-tv)
+  perpspec: perpspec, // String; insertData wraps to array
+  tbv,
+  tsv
+};
 
-    await dbManager.insertData(perpspec, [record]);
+    await dbManager.insertData([record]);
     sessionInsertCounts[perpspec] += 1;
 
     // Clear bucket after successful flush
@@ -586,7 +586,7 @@ async function startPeriodicFlush() {
     for (const perpspec of Object.keys(EXCHANGE_CONFIG)) {
       const key = EXCHANGE_CONFIG[perpspec].PERPSPEC;
       if (!lastStatusLog[key] || nowLog - lastStatusLog[key] >= STATUS_LOG_INTERVAL) {
-        const message = `${key} 1m pull & calc`;
+        const message = `🚥 ${key} 1m pull & calc`;
         await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message);
         console.log(`${STATUS_COLOR}${message}${RESET}`);
         lastStatusLog[key] = nowLog;
@@ -599,7 +599,7 @@ async function startPeriodicFlush() {
 // MAIN EXECUTION
 // ============================================================================
 async function execute() {
-  console.log(`${STATUS_COLOR}⚖️ Starting ${SCRIPT_NAME} - WebSocket taker volume streaming (1m real-time)${RESET}`);
+  console.log(`${STATUS_COLOR}🚦 Starting ${SCRIPT_NAME} - WebSocket taker volume streaming (1m real-time)${RESET}`);
 
   // Load OKX contract values for normalization
   await loadOkxContracts();
@@ -617,7 +617,7 @@ async function execute() {
 
   // Graceful shutdown
   process.on('SIGINT', async () => {
-    console.log(`\n⚖️ ${SCRIPT_NAME} received SIGINT, stopping...`);
+    console.log(`\n🚦 ${SCRIPT_NAME} received SIGINT, stopping...`);
     
     // Flush all remaining buckets
     for (const perpspec of Object.keys(volumeBuckets)) {

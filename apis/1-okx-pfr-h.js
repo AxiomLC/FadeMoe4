@@ -1,7 +1,7 @@
-// SCRIPT: okx-pfr-h.js (OKX Premium Funding Rate Backfill + Colored Console + Specific Log Removal)
-// Updated: 14 Oct 2025
-// Premium Funding Rate Backfill for OKX with HTTP/HTTPS Proxy Support
-// Features: Separate speed controls for direct vs proxy, chunked DB inserts
+// SCRIPT: 1-okx-pfr-h.js (OKX Premium Funding Rate Backfill)
+// Updated: 21 Oct 2025 - Unified perp_data schema
+// Features: Dual IP (direct + proxy), chunked inserts, unified table structure
+//** insertBackfillData
 
 const axios = require('axios');
 const { HttpsProxyAgent } = require('https-proxy-agent');
@@ -10,35 +10,36 @@ const apiUtils = require('../api-utils');
 const perpList = require('../perp-list');
 const pLimit = require('p-limit');
 
-const SCRIPT_NAME = 'okx-pfr-h.js';
+const SCRIPT_NAME = '1-okx-pfr-h.js';
 const STATUS_COLOR = '\x1b[96m'; // Light blue for all console logs
-const RESET = '\x1b[0m'; // Reset console color
+const RESET = '\x1b[0m';
 
 // ============================================================================
 // USER SPEED SETTINGS
 // ============================================================================
-const DAYS = 10;                      // Number of days back to fill
+const DAYS = 10;
 
 // DIRECT CONNECTION SETTINGS
-const DIRECT_CONCURRENCY = 12;         // Concurrent symbols on direct (conservative)
-const DIRECT_PAGE_DELAY_MS = 200;     // Delay between pages - ~8 req/s per symbol
-const DIRECT_TIMEOUT_MS = 7000;       // Request timeout for direct
+const DIRECT_CONCURRENCY = 12;
+const DIRECT_PAGE_DELAY_MS = 200;
+const DIRECT_TIMEOUT_MS = 7000;
 
 // PROXY CONNECTION SETTINGS
-const PROXY_CONCURRENCY = 12;         // Concurrent symbols on proxy (lower - datacenter limits)
-const PROXY_PAGE_DELAY_MS = 100;      // Slower paging for proxy stability
-const PROXY_TIMEOUT_MS = 9000;       // Longer timeout for proxy
+const PROXY_CONCURRENCY = 12;
+const PROXY_PAGE_DELAY_MS = 100;
+const PROXY_TIMEOUT_MS = 9000;
 
 // SHARED SETTINGS
-const RETRY_429_MAX = 2;              // Max retries on 429 errors
-const RETRY_429_BASE_MS = 600;        // Base delay for 429 retry (exponential backoff)
-const HEARTBEAT_STATUS_INTERVAL = 35000;   // Status heartbeat every 25 sec
-const HEARTBEAT_429_INTERVAL = 30000;      // 429 error summary every 15 sec
-const DIRECT_PROXY_SPLIT = 50;        // Percentage of symbols using direct (rest use proxy)
-const DB_INSERT_MILESTONE = 50000;    // Log inserts every 25k records
+const RETRY_429_MAX = 2;
+const RETRY_429_BASE_MS = 600;
+const HEARTBEAT_STATUS_INTERVAL = 35000;
+const HEARTBEAT_429_INTERVAL = 30000;
+const DIRECT_PROXY_SPLIT = 50;
+const DB_INSERT_MILESTONE = 50000;
+const CHUNK_SIZE = 10000; // Insert in 10k chunks
 
 // ============================================================================
-// PROXY CONFIGURATION - IPRoyal HTTP Datacenter Proxy
+// PROXY CONFIGURATION
 // ============================================================================
 const PROXY_CONFIG = {
   username: '14a233d28dd8f',
@@ -47,11 +48,10 @@ const PROXY_CONFIG = {
   port: 12323
 };
 
-// Create HTTP/HTTPS proxy URL and agent
 const proxyUrl = `http://${PROXY_CONFIG.username}:${PROXY_CONFIG.password}@${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`;
 const proxyAgent = new HttpsProxyAgent(proxyUrl);
 
-console.log(`${STATUS_COLOR}🔧okx-pfr Proxy configured: ${PROXY_CONFIG.host}:${PROXY_CONFIG.port}${RESET}`);
+console.log(`${STATUS_COLOR}🔧 okx-pfr Proxy configured: ${PROXY_CONFIG.host}:${PROXY_CONFIG.port}${RESET}`);
 
 // ============================================================================
 // DERIVED SETTINGS
@@ -60,7 +60,6 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.now();
 const START = NOW - DAYS * MS_PER_DAY;
 
-// Split symbols between direct and proxy
 const splitIndex = Math.ceil(perpList.length * (DIRECT_PROXY_SPLIT / 100));
 const directSymbols = perpList.slice(0, splitIndex);
 const proxySymbols = perpList.slice(splitIndex);
@@ -68,20 +67,21 @@ const proxySymbols = perpList.slice(splitIndex);
 console.log(`${STATUS_COLOR}okx-pfr Symbol split: ${directSymbols.length} direct, ${proxySymbols.length} proxy${RESET}`);
 
 // ============================================================================
-// UTILITIES
-// ============================================================================
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function normalizeNumeric(v) { const n = parseFloat(v); return isNaN(n) ? null : n; }
-
-// ============================================================================
 // EXCHANGE CONFIGURATION
 // ============================================================================
 const OKX_CONFIG = {
   perpspec: 'okx-pfr',
+  exchange: 'okx',
   url: 'https://www.okx.com/api/v5/public/premium-history',
-  limit: 100,  // OKX allows 100 max per request
+  limit: 100,
   mapSymbol: s => `${s}-USDT-SWAP`
 };
+
+// ============================================================================
+// UTILITIES
+// ============================================================================
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function normalizeNumeric(v) { const n = parseFloat(v); return isNaN(n) ? null : n; }
 
 // ============================================================================
 // STATISTICS TRACKING
@@ -110,8 +110,6 @@ let lastInsertLog = 0;
 // ============================================================================
 // HEARTBEAT LOOPS
 // ============================================================================
-
-// Status heartbeat - every 25 seconds
 async function statusHeartbeat() {
   while (!heartbeatStop) {
     const msg = `${OKX_CONFIG.perpspec} fetched ${stats.recordsFetched} records | Direct: ${stats.directRequests} req | Proxy: ${stats.proxyRequests} req`;
@@ -121,7 +119,6 @@ async function statusHeartbeat() {
   }
 }
 
-// 429 error heartbeat - every 15 seconds
 async function error429Heartbeat() {
   while (!heartbeatStop) {
     await sleep(HEARTBEAT_429_INTERVAL);
@@ -130,10 +127,10 @@ async function error429Heartbeat() {
     const newRequests = stats.totalRequests - lastTotalRequests;
     
     if (new429s > 0) {
-    const yellowStart = '\x1b[33m';
+      const yellowStart = '\x1b[33m';
       const yellowEnd = '\x1b[0m';
       const msg = `${new429s} 429's/${newRequests} requests (Direct: ${stats.direct429Count}, Proxy: ${stats.proxy429Count})`;
-      console.log(`${yellowStart}(429) ${msg}${yellowEnd}`);
+      console.log(`${yellowStart}⚠️ (429) ${msg}${yellowEnd}`);
     }
     
     last429Count = stats.error429Count;
@@ -142,14 +139,61 @@ async function error429Heartbeat() {
 }
 
 // ============================================================================
-// FETCH FUNCTION WITH SEPARATE SETTINGS
+// DATA PROCESSING - UNIFIED PERP_DATA STRUCTURE
+// Converts OKX API response to unified perp_data format
+// KEY FIX: Floor timestamps to nearest minute (e.g., 18:56:29 → 18:56:00)
+// OKX returns timestamps in milliseconds, so we divide by 60000, floor, then multiply back
+// ============================================================================
+function processOKXData(rawData, baseSymbol) {
+  const result = [];
+  for (const rec of rawData) {
+    const rawTs = parseInt(rec.ts, 10);
+    const flooredTs = Math.floor(rawTs / 60000) * 60000; // Floor to nearest minute
+    const ts = BigInt(flooredTs);
+    const pfr = normalizeNumeric(rec.premium);
+    
+    if (pfr !== null && !isNaN(rawTs)) {
+      result.push({
+        ts: ts,
+        symbol: baseSymbol,
+        exchange: OKX_CONFIG.exchange,
+        perpspec: OKX_CONFIG.perpspec,
+        pfr: pfr
+      });
+    }
+  }
+  return result;
+}
+
+// ============================================================================
+// CHUNKED INSERT HELPER
+// ============================================================================
+async function insertInChunks(allData) {
+  if (allData.length === 0) return;
+  
+  for (let i = 0; i < allData.length; i += CHUNK_SIZE) {
+    const chunk = allData.slice(i, i + CHUNK_SIZE);
+    await dbManager.insertBackfillData(chunk);
+    stats.recordsInserted += chunk.length;
+    
+    // Log at milestones
+    if (Math.floor(stats.recordsInserted / DB_INSERT_MILESTONE) > Math.floor(lastInsertLog / DB_INSERT_MILESTONE)) {
+      const msg = `${OKX_CONFIG.perpspec} inserted ${stats.recordsInserted} records`;
+      console.log(`${STATUS_COLOR}🔩 ${msg}${RESET}`);
+      await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg);
+      lastInsertLog = stats.recordsInserted;
+    }
+  }
+}
+
+// ============================================================================
+// FETCH FUNCTION WITH DUAL IP SUPPORT
 // ============================================================================
 async function fetchOKXPremium(baseSymbol, useProxy = false) {
   const symbol = OKX_CONFIG.mapSymbol(baseSymbol);
   const allData = [];
   const seenTimestamps = new Set();
   
-  // Select settings based on connection type
   const pageDelay = useProxy ? PROXY_PAGE_DELAY_MS : DIRECT_PAGE_DELAY_MS;
   const timeout = useProxy ? PROXY_TIMEOUT_MS : DIRECT_TIMEOUT_MS;
   const connType = useProxy ? 'proxy' : 'direct';
@@ -158,9 +202,7 @@ async function fetchOKXPremium(baseSymbol, useProxy = false) {
   let zeroNewCount = 0;
   let retries429 = 0;
 
-  const axiosConfig = {
-    timeout: timeout
-  };
+  const axiosConfig = { timeout: timeout };
   
   if (useProxy) {
     axiosConfig.httpsAgent = proxyAgent;
@@ -209,7 +251,7 @@ async function fetchOKXPremium(baseSymbol, useProxy = false) {
         if (zeroNewCount >= 2) break;
       } else {
         zeroNewCount = 0;
-        retries429 = 0; // Reset on success
+        retries429 = 0;
       }
 
       if (oldestTs <= START) break;
@@ -217,21 +259,13 @@ async function fetchOKXPremium(baseSymbol, useProxy = false) {
 
       currentAfter = oldestTs - 1;
 
-      // Process and insert accumulated data
-      if (allData.length > 0) {
-        const processed = processOKXData(allData.splice(0), baseSymbol);
+      // Process and insert accumulated data in chunks
+      if (allData.length >= CHUNK_SIZE) {
+        const toInsert = allData.splice(0, CHUNK_SIZE);
+        const processed = processOKXData(toInsert, baseSymbol);
         if (processed.length > 0) {
-          await dbManager.insertData(OKX_CONFIG.perpspec, processed);
-          stats.recordsInserted += processed.length;
+          await insertInChunks(processed);
           stats.recordsFetched += processed.length;
-          
-          // Log at 25k milestones
-          if (Math.floor(stats.recordsInserted / DB_INSERT_MILESTONE) > Math.floor(lastInsertLog / DB_INSERT_MILESTONE)) {
-            const msg = `${OKX_CONFIG.perpspec} inserted ${stats.recordsInserted} records`;
-            console.log(`${STATUS_COLOR}${msg}${RESET}`);
-            await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg);
-            lastInsertLog = stats.recordsInserted;
-          }
         }
       }
 
@@ -277,8 +311,7 @@ async function fetchOKXPremium(baseSymbol, useProxy = false) {
   if (allData.length > 0) {
     const processed = processOKXData(allData, baseSymbol);
     if (processed.length > 0) {
-      await dbManager.insertData(OKX_CONFIG.perpspec, processed);
-      stats.recordsInserted += processed.length;
+      await insertInChunks(processed);
       stats.recordsFetched += processed.length;
     }
   }
@@ -287,42 +320,18 @@ async function fetchOKXPremium(baseSymbol, useProxy = false) {
 }
 
 // ============================================================================
-// DATA PROCESSING
-// ============================================================================
-function processOKXData(rawData, baseSymbol) {
-  const result = [];
-  for (const rec of rawData) {
-    const ts = parseInt(rec.ts);
-    const pfr = normalizeNumeric(rec.premium);
-    if (pfr !== null && !isNaN(ts)) {
-      result.push({
-        ts,
-        symbol: baseSymbol,
-        source: OKX_CONFIG.perpspec,
-        perpspec: OKX_CONFIG.perpspec,
-        interval: '1m',
-        pfr
-      });
-    }
-  }
-  return result;
-}
-
-// ============================================================================
 // MAIN BACKFILL FUNCTION
 // ============================================================================
 async function backfill() {
   const startTime = Date.now();
   
-  console.log(`${STATUS_COLOR}🔨 Starting ${SCRIPT_NAME} - Premium Funding Rate backfill${RESET}`);
+  console.log(`${STATUS_COLOR}🔧 Starting ${SCRIPT_NAME} - Premium Funding Rate backfill${RESET}`);
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} started`);
 
-  // Start heartbeat loops
   heartbeatStop = false;
   statusHeartbeat();
   error429Heartbeat();
 
-  // Separate p-limit for direct and proxy
   const directLimit = pLimit(DIRECT_CONCURRENCY);
   const proxyLimit = pLimit(PROXY_CONCURRENCY);
   
@@ -361,10 +370,10 @@ async function backfill() {
   await Promise.allSettled(tasks);
 
   const msg = `${OKX_CONFIG.perpspec} backfilling complete ${stats.symbolsCompleted} symbols. Final Loop started.`;
-  console.log(`${STATUS_COLOR}🔨 ${msg}${RESET}`);
+  console.log(`${STATUS_COLOR}🔧 ${msg}${RESET}`);
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg);
 
-  // Final loop - Fetch recent 5 records per symbol
+  // FINAL LOOP - Fetch recent 5 records per symbol
   const finalTasks = [];
   
   for (const baseSym of directSymbols) {
@@ -380,7 +389,7 @@ async function backfill() {
           const records = res.data.data || [];
           const processed = processOKXData(records, baseSym);
           if (processed.length > 0) {
-            await dbManager.insertData(OKX_CONFIG.perpspec, processed);
+            await dbManager.insertBackfillData(processed);
             stats.recordsInserted += processed.length;
           }
         }
@@ -412,7 +421,7 @@ async function backfill() {
           const records = res.data.data || [];
           const processed = processOKXData(records, baseSym);
           if (processed.length > 0) {
-            await dbManager.insertData(OKX_CONFIG.perpspec, processed);
+            await dbManager.insertBackfillData(processed);
             stats.recordsInserted += processed.length;
           }
         }
@@ -431,9 +440,8 @@ async function backfill() {
   heartbeatStop = true;
   await sleep(1000);
 
-  // Completion summary
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-  const finalMessage = `🔨 ${SCRIPT_NAME} completed in ${duration}s`;
+  const finalMessage = `⏱️ ${SCRIPT_NAME} completed in ${duration}s`;
   console.log(`${finalMessage}`);
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', finalMessage);
 }

@@ -1,10 +1,11 @@
 /* ==========================================
- * bin-rsi-c.js - 16 Oct 2025 Continuous RSI Polling Script
+ * bin-rsi-c.js - 22 Oct 2025 Continuous RSI Polling Script - Unified Schema
  * Polls new 1m data from bin-ohlcv, computes RSI11 (rsi1) and RSI11 on rolling 60min agg (rsi60)
- * Inserts into rsi perpspec/source at 1m intervals (ON CONFLICT DO NOTHING)
- * Assumes backfill done via rsi9.js; incremental cache for efficiency
+ * Inserts into bin-rsi perpspec at 1m intervals (via insertData for -c.js)
+ * Assumes backfill done via rsi-h.js; incremental cache for efficiency
  * Hardcoded PERIOD=11 at top, like -h files
  * Fix: Rolling 60min agg for present-time rsi60 (updates every min from last ~60min 1m data)
+ * Unified: Query by exchange='bin' + c IS NOT NULL; insert with exchange/perpspec; no source/interval
  * ========================================== */
 
 const { Pool } = require('pg');
@@ -20,15 +21,14 @@ const PERIOD = 11; // Hardcoded RSI period
 const POLL_INTERVAL = 60 * 1000; // 1min polling
 const CACHE_SIZE = 1440; // Cache last 1 day 1m bars/symbol for history (rsi1) and rolling 60m (rsi60)
 const PERPSPEC_SOURCE = 'bin-rsi';
-const DATA_PERPSPEC = 'bin-ohlcv';
-const INTERVAL = '1m';
+const DATA_EXCHANGE = 'bin'; // For OHLCV source (unified)
 const ROLLING_WINDOW_MIN = 60; // For initial fetch
 const INITIAL_WINDOW_MS = 24 * 60 * 60 * 1000; // 1 day for initial cache fill
 const ROLLING_HOURS = 24; // Use last 24 hours of 1m for ~24 60m bars in rsi60
 let isShuttingDown = false;
 let isProcessing = false;
 
-// Database pool
+// Database pool (for queries; inserts use dbManager)
 const pool = new Pool({
   host: process.env.DB_HOST,
   port: process.env.DB_PORT,
@@ -47,11 +47,11 @@ let priceCache = new Map(); // { symbol: array of {ts, close} }
  * UTILITY FUNCTIONS
  * ========================================== */
 
-// Get all symbols from bin-ohlcv
+// Get all symbols from bin-ohlcv (unified: by exchange + c IS NOT NULL)
 async function getSymbols() {
   try {
-    const query = `SELECT DISTINCT symbol FROM perp_data WHERE perpspec = $1`;
-    const result = await pool.query(query, [DATA_PERPSPEC]);
+    const query = `SELECT DISTINCT symbol FROM perp_data WHERE exchange = $1 AND c IS NOT NULL`;
+    const result = await pool.query(query, [DATA_EXCHANGE]);
     return result.rows.map(row => row.symbol);
   } catch (error) {
     console.error('Error getting symbols:', error.message);
@@ -61,7 +61,7 @@ async function getSymbols() {
 }
 
 // Fetch recent 1m data (initial: last 1 day for full cache; polls: last 2min incremental)
-async function fetchRecentRecentData(symbol) {
+async function fetchRecentData(symbol) {
   // Check if we're shutting down
   if (isShuttingDown) {
     console.log(`Shutdown requested, skipping fetch for ${symbol}`);
@@ -74,11 +74,11 @@ async function fetchRecentRecentData(symbol) {
     const query = `
       SELECT ts, c::numeric AS close
       FROM perp_data
-      WHERE symbol = $1 AND perpspec = $2 AND interval = $3
-      AND ts > (SELECT COALESCE(MAX(ts), 0) FROM perp_data WHERE symbol = $1 AND perpspec = $2 AND interval = $3) - $4
+      WHERE symbol = $1 AND exchange = $2 AND c IS NOT NULL
+      AND ts > (SELECT COALESCE(MAX(ts), 0) FROM perp_data WHERE symbol = $1 AND exchange = $2 AND c IS NOT NULL) - $3
       ORDER BY ts ASC
     `;
-    const result = await pool.query(query, [symbol, DATA_PERPSPEC, INTERVAL, timeWindow]);
+    const result = await pool.query(query, [symbol, DATA_EXCHANGE, timeWindow]);
     return result.rows.map(row => {
       let ts; const tsStr = String(row.ts).trim();
       if (/^\d+$/.test(tsStr) && tsStr.length >= 10 && tsStr.length <= 13) ts = new Date(Number(tsStr));
@@ -136,7 +136,7 @@ function getRolling60mSeries(cachedPrices) {
   }
 
   // Trim to last 60 hours
-  const sixtyHoursAgo = new Date(Date.now() - ROLLING_WINDOW_MIN * 60 * 60 * 1000);
+  const sixtyHoursAgo = new Date(Date.now() - ROLLING_HOURS * 60 * 60 * 1000);
   return hourlyBars.filter(bar => bar.ts >= sixtyHoursAgo);
 }
 
@@ -180,7 +180,7 @@ function calculateRSI(prices, period) {
 // Poll one symbol: Fetch recent, update cache, compute rsi1/rsi60, insert at present ts
 async function pollSymbol(symbol) {
   try {
-    const newPrices = await fetchRecentRecentData(symbol);
+    const newPrices = await fetchRecentData(symbol);
     if (newPrices.length === 0) return; // No new data
 
     // Initialize/update cache
@@ -199,20 +199,19 @@ async function pollSymbol(symbol) {
     const latestRsi1 = rsi1Values[rsi1Values.length - 1];
     const latestRsi60 = rsi60Values.length > 0 ? rsi60Values[rsi60Values.length - 1] : { rsi: null };
 
-    // Insert at present ts (latest 1m ts, with both RSIs)
+    // Insert at present ts (latest 1m ts, with both RSIs) - unified format
     const presentTs = latestRsi1.ts.getTime();
     const insertData = [{
-      ts: BigInt(presentTs),
+      ts: apiUtils.toMillis(BigInt(presentTs)),
       symbol: symbol,
-      source: PERPSPEC_SOURCE,
-      perpspec: PERPSPEC_SOURCE,
-      interval: INTERVAL,
+      exchange: DATA_EXCHANGE, // bin
+      perpspec: PERPSPEC_SOURCE, // String; insertData wraps to array
       rsi1: latestRsi1.rsi,
       rsi60: latestRsi60.rsi  // Present rsi60 from rolling hourly agg
     }];
 
-    // Bulk insert (single row per poll, ON CONFLICT DO NOTHING)
-    await dbManager.insertData(PERPSPEC_SOURCE, insertData);
+    // Bulk insert (single row per poll, via insertData for -c.js)
+    await dbManager.insertData(insertData);
 
   } catch (error) {
     console.error(`Error polling ${symbol}:`, error.message);

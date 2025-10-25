@@ -101,6 +101,7 @@ function toMillis(ts) {
     }
 
     // Ensure the final result is a BigInt
+    const flooredMillis = Math.floor(Number(millis) / 60000) * 60000;
     return BigInt(millis);
 }
 
