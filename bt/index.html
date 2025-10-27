@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!--
+    bt/index.html - FadeAI Backtester UI
+    Description: Frontend interface for building/running backtests. Horizontal param selectors, AlgoQL builder,
+                 results viewer, and AI chat (per README Phases 1-4). Uses Fetch API for /strategy, /backtest, etc.
+    Date: 24 Oct 2025
+    Version: 1.0 (Enhanced for bt/ rename and new schema)
+  -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FadeAI Backtester (bt/)</title>
+  <style>
+    /* Basic styling for horizontal layout (per README UI flow) */
+    body { font-family: Arial, sans-serif; padding: 20px; background: #f0f0f0; margin: 0; }
+    h1, h2 { color: #333; }
+    button { padding: 10px 15px; margin: 5px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; }
+    button:hover { background: #45a049; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    pre { background: #fff; padding: 15px; border-radius: 5px; overflow-x: auto; max-height: 300px; }
+    .section { margin-bottom: 30px; padding: 15px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .algo-box { border: 1px solid #ddd; padding: 10px; background: #f9f9f9; min-height: 50px; }
+    input, select { padding: 5px; margin: 5px; }
+  </style>
+</head>
+<body>
+  <!-- ===== MAIN HEADER ===== -->
+  <h1>🚀 FadeAI Backtester (bt/ Mode)</h1>
+  <p>Configure strategies, run backtests, and get AI suggestions. Data from perp_metrics (new schema).</p>
+  <p><em>Folder: bt/ | Date: 24 Oct 2025</em></p>
+
+  <!-- ===== SECTION 1: SYMBOLS & COLUMNS LOADER ===== -->
+  <div class="section">
+    <h2>1. Load Metadata (Symbols & % Chg Columns)</h2>
+    <button onclick="loadSymbols()">Load Symbols (from perp_metrics)</button>
+    <button onclick="loadColumns()">Load Columns (chg_1m/5m/10m)</button>
+    <pre id="symbols-output">Click to load symbols...</pre>
+    <pre id="columns-output">Click to load columns...</pre>
+  </div>
+
+  <!-- ===== SECTION 2: STRATEGY BUILDER (AlgoQL-like) ===== -->
+  <div class="section">
+    <h2>2. Build & Save Strategy</h2>
+    <!-- Horizontal param selectors (per README Step 1) -->
+    <div>
+      <label>Symbols: </label>
+      <select id="symbols-select" multiple size="3" style="width: 150px;"></select>
+      <label>Direction: </label>
+      <select id="direction-select"><option>Long</option><option>Short</option></select>
+    </div>
+    <div>
+      <label>Exchange: </label><select id="exchange-select"><option>bin</option><option>byb</option><option>okx</option></select>
+      <label>Param: </label><select id="param-select"></select>
+      <label>Timeframe: </label><select id="timeframe-select"><option>chg_1m</option><option>chg_5m</option><option>chg_10m</option></select>
+      <label>Operator: </label><select id="op-select"><option>&gt;</option><option>&lt;</option><option>&gt;=</option><option>&lt;=</option></select>
+      <label>Value: </label><input type="number" id="value-input" step="0.01" value="0.31">
+      <button onclick="addCondition()">Add Condition (AND)</button>
+    </div>
+    <div class="algo-box" id="algo-box">Current Algo: <span id="algo-text">BTC;Long;bin_pfr_chg_5m&gt;0.31</span></div>
+    <button onclick="saveStrategy()">Save Strategy to JSON</button>
+    <p id="strategy-status">Status: Ready</p>
+  </div>
+
+  <!-- ===== SECTION 3: BACKTEST RUNNER ===== -->
+  <div class="section">
+    <h2>3. Run Backtest</h2>
+    <button onclick="runBacktest()" id="backtest-btn">🚀 Run Backtest (Optimizes TP/SL)</button>
+    <pre id="backtest-output">Click after saving strategy... Results: stats, trades, bestScheme</pre>
+  </div>
+
+  <!-- ===== SECTION 4: AI SUGGESTIONS ===== -->
+  <div class="section">
+    <h2>4. AI Suggestions (via server.js)</h2>
+    <input type="text" id="ai-prompt" placeholder="e.g., Suggest long for BTC divergence" style="width: 300px;">
+    <button onclick="getSuggestions()">Get Suggestions</button>
+    <pre id="suggestions-output">Click to generate AlgoQL ideas...</pre>
+  </div>
+
+  <!-- ===== SECTION 5: HEALTH & LOGS ===== -->
+  <div class="section">
+    <h2>5. System Health</h2>
+    <button onclick="checkHealth()">Check Health (DB + Server)</button>
+    <pre id="health-output">Click to check...</pre>
+  </div>
+
+  <script>
+    // --- UI Initialization ---
+    let currentConditions = [];  // Track conditions for AlgoQL build
+    let symbolsList = [];  // Global for selects
+
+    // Populate selects from loaded data
+    async function loadSymbols() {
+      try {
+        const res = await fetch('/symbols');
+        if (!res.ok) throw new Error(await res.text());
+        const { symbols } = await res.json();
+        symbolsList = symbols;
+        document.getElementById('symbols-output').textContent = JSON.stringify(symbols, null, 2);
+        // Populate select
+        const select = document.getElementById('symbols-select');
+        select.innerHTML = symbols.map(s => `<option>${s}</option>`).join('');
+      } catch (err) {
+        document.getElementById('symbols-output').textContent = 'Error: ' + err.message + '\nEnsure DB has data in perp_metrics.';
+      }
+    }
+
+    async function loadColumns() {
+      try {
+        const res = await fetch('/columns');
+        if (!res.ok) throw new Error(await res.text());
+        const { columns } = await res.json();
+        document.getElementById('columns-output').textContent = JSON.stringify(columns, null, 2);
+        // Populate param select (strip _chg_ for display)
+        const select = document.getElementById('param-select');
+        select.innerHTML = columns.map(c => `<option>${c.replace('_chg_', '_').replace(/_\d+m$/, '')}</option>`).join('');
+      } catch (err) {
+        document.getElementById('columns-output').textContent = 'Error: ' + err.message;
+      }
+    }
+
+    // --- Strategy Builder ---
+    function addCondition() {
+      const exch = document.getElementById('exchange-select').value;
+      const param = document.getElementById('param-select').value;
+      const tf = document.getElementById('timeframe-select').value;
+      const op = document.getElementById('op-select').value;
+      const val = document.getElementById('value-input').value;
+      const fullParam = param + '_' + tf;  // e.g., pfr_chg_5m
+      const condition = { exchange: exch, param: fullParam, operator: op, value: parseFloat(val) };
+      currentConditions.push(condition);
+      updateAlgoText();
+    }
+
+    function updateAlgoText() {
+      const symbols = Array.from(document.getElementById('symbols-select').selectedOptions).map(opt => opt.value).join(',');
+      const direction = document.getElementById('direction-select').value;
+      const condStr = currentConditions.map(c => `${c.exchange}_${c.param}${c.operator}${c.value}`).join(' AND ');
+      document.getElementById('algo-text').textContent = `${symbols || 'ALL'};${direction};${condStr}`;
+    }
+
+    async function saveStrategy() {
+      const symbols = Array.from(document.getElementById('symbols-select').selectedOptions).map(opt => opt.value);
+      const direction = document.getElementById('direction-select').value;
+      const strategy = {
+        name: 'UI Built Strategy',
+        symbols: symbols.length ? symbols : ['BTC'],  // Default
+        direction,
+        conditions: currentConditions,
+        mtTokens: []  // Optional
+      };
+      try {
+        const res = await fetch('/strategy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(strategy)
+        });
+        if (!res.ok) throw new Error(await res.text());
+        document.getElementById('strategy-status').textContent = 'Saved! Ready for backtest.';
+        updateAlgoText();  // Refresh display
+      } catch (err) {
+        document.getElementById('strategy-status').textContent = 'Error: ' + err.message;
+      }
+    }
+
+    // --- Backtest Runner ---
+    async function runBacktest() {
+      const btn = document.getElementById('backtest-btn');
+      btn.disabled = true;
+      btn.textContent = 'Running...';
+      try {
+        const res = await fetch('/backtest', { method: 'POST' });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        document.getElementById('backtest-output').textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        document.getElementById('backtest-output').textContent = 'Error: ' + err.message + '\nCheck strategy.json and DB data.';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🚀 Run Backtest';
+      }
+    }
+
+    // --- AI Suggestions ---
+    async function getSuggestions() {
+      const prompt = document.getElementById('ai-prompt').value;
+      try {
+        const res = await fetch('/suggest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: prompt || 'Suggest a basic long strategy' })
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const { suggestions } = await res.json();
+        document.getElementById('suggestions-output').textContent = JSON.stringify(suggestions, null, 2);
+      } catch (err) {
+        document.getElementById('suggestions-output').textContent = 'Error: ' + err.message + '\nCheck server.js implementation.';
+      }
+    }
+
+    // --- Health Check ---
+    async function checkHealth() {
+      try {
+        const res = await fetch('/health');
+        const data = await res.json();
+        document.getElementById('health-output').textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        document.getElementById('health-output').textContent = 'Error: ' + err.message + '\nServer not responding.';
+      }
+    }
+
+    // --- Event Listeners (for dynamic updates) ---
+    document.getElementById('direction-select').addEventListener('change', updateAlgoText);
+    document.getElementById('symbols-select').addEventListener('change', updateAlgoText);
+
+    // Auto-load metadata on start
+    window.onload = () => {
+      loadSymbols();
+      loadColumns();
+      console.log('bt/ UI loaded - Ready for backtesting (24 Oct 2025)');
+    };
+  </script>
+</body>
+</html>

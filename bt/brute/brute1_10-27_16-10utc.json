@@ -1,0 +1,1950 @@
+{
+  "metadata": {
+    "script": "brute2.js",
+    "timestamp": "2025-10-27T16:10:34.222Z",
+    "runtime": "1.0 minutes",
+    "config": {
+      "corePercent": [
+        1.5,
+        2,
+        3,
+        5,
+        10,
+        30,
+        60,
+        100
+      ],
+      "detection": {
+        "algoWindow": 30,
+        "minTrades": 50,
+        "maxTrades": 500
+      },
+      "tradeExecution": {
+        "tradeWindow": 10,
+        "posVal": 1000,
+        "tpPerc": [
+          1.2,
+          1.5,
+          2,
+          2.5,
+          3
+        ],
+        "slPerc": [
+          0.2,
+          0.4,
+          0.6,
+          1,
+          1.2
+        ]
+      },
+      "targetSymbols": {
+        "useAll": true,
+        "list": [
+          "BTC",
+          "ETH",
+          "SOL",
+          "DOGE",
+          "XRP"
+        ]
+      },
+      "maxSamples": 8000,
+      "params": [
+        "pfr_chg_1m",
+        "pfr_chg_5m",
+        "pfr_chg_10m",
+        "lsr_chg_1m",
+        "lsr_chg_5m",
+        "lsr_chg_10m",
+        "rsi1_chg_1m",
+        "rsi1_chg_5m",
+        "rsi1_chg_10m",
+        "rsi60_chg_1m",
+        "rsi60_chg_5m",
+        "rsi60_chg_10m",
+        "tbv_chg_1m",
+        "tbv_chg_5m",
+        "tbv_chg_10m",
+        "tsv_chg_1m",
+        "tsv_chg_5m",
+        "tsv_chg_10m"
+      ],
+      "exchanges": [
+        "bin"
+      ],
+      "outputTop": 100,
+      "concurrencyLimit": 40
+    }
+  },
+  "summary": {
+    "overview": "Tested 16 thresholds × 18 params × 1 exchanges × 2 directions = 14400 total tests, 71 profitable patterns found (PF > 1.0)",
+    "scoreFormula": "Score = (WinRate/100 * 30) + (PF * 40) + (min(trades/maxTrades, 1) * 30)",
+    "topByProfitFactor": [
+      {
+        "algo": "ALL; Long; bin_rsi60_chg_5m>1.5",
+        "tp": 3,
+        "sl": 0.2,
+        "pf": 3.06,
+        "wr": "57.7",
+        "trades": 215
+      },
+      {
+        "algo": "ALL; Long; bin_rsi60_chg_5m>2",
+        "tp": 3,
+        "sl": 0.2,
+        "pf": 2.87,
+        "wr": "55.7",
+        "trades": 194
+      },
+      {
+        "algo": "ALL; Short; bin_rsi60_chg_10m>10",
+        "tp": 1.2,
+        "sl": 0.2,
+        "pf": 2.73,
+        "wr": "60.1",
+        "trades": 148
+      },
+      {
+        "algo": "ALL; Long; bin_rsi60_chg_5m>3",
+        "tp": 3,
+        "sl": 0.2,
+        "pf": 2.68,
+        "wr": "54.5",
+        "trades": 176
+      },
+      {
+        "algo": "ALL; Short; bin_pfr_chg_10m>100",
+        "tp": 1.2,
+        "sl": 0.2,
+        "pf": 2.34,
+        "wr": "58.2",
+        "trades": 110
+      },
+      {
+        "algo": "ALL; Long; bin_rsi60_chg_5m>5",
+        "tp": 3,
+        "sl": 0.2,
+        "pf": 2.33,
+        "wr": "50.0",
+        "trades": 140
+      },
+      {
+        "algo": "ALL; Long; bin_rsi1_chg_10m>100",
+        "tp": 1.2,
+        "sl": 0.2,
+        "pf": 2.26,
+        "wr": "59.6",
+        "trades": 285
+      },
+      {
+        "algo": "ALL; Long; bin_rsi1_chg_5m>100",
+        "tp": 3,
+        "sl": 0.4,
+        "pf": 2.21,
+        "wr": "56.0",
+        "trades": 134
+      },
+      {
+        "algo": "ALL; Long; bin_rsi1_chg_5m>60",
+        "tp": 3,
+        "sl": 0.2,
+        "pf": 2.16,
+        "wr": "55.9",
+        "trades": 290
+      },
+      {
+        "algo": "ALL; Long; bin_rsi1_chg_10m>60",
+        "tp": 1.2,
+        "sl": 0.2,
+        "pf": 2.13,
+        "wr": "59.2",
+        "trades": 478
+      },
+      {
+        "algo": "ALL; Short; bin_rsi60_chg_10m>5",
+        "tp": 1.2,
+        "sl": 0.2,
+        "pf": 2,
+        "wr": "54.1",
+        "trades": 246
+      },
+      {
+        "algo": "ALL; Short; bin_rsi60_chg_10m>3",
+        "tp": 1.2,
+        "sl": 0.2,
+        "pf": 1.83,
+        "wr": "52.2",
+        "trades": 272
+      },
+      {
+        "algo": "ALL; Short; bin_pfr_chg_10m<-60",
+        "tp": 1.2,
+        "sl": 0.2,
+        "pf": 1.8,
+        "wr": "50.9",
+        "trades": 332
+      },
+      {
+        "algo": "ALL; Short; bin_pfr_chg_10m<-100",
+        "tp": 1.5,
+        "sl": 0.2,
+        "pf": 1.8,
+        "wr": "49.5",
+        "trades": 184
+      },
+      {
+        "algo": "ALL; Long; bin_rsi1_chg_1m>30",
+        "tp": 1.5,
+        "sl": 0.2,
+        "pf": 1.78,
+        "wr": "48.4",
+        "trades": 215
+      },
+      {
+        "algo": "ALL; Short; bin_rsi60_chg_10m>2",
+        "tp": 1.2,
+        "sl": 0.2,
+        "pf": 1.76,
+        "wr": "51.2",
+        "trades": 283
+      },
+      {
+        "algo": "ALL; Short; bin_pfr_chg_10m>60",
+        "tp": 1.2,
+        "sl": 0.2,
+        "pf": 1.76,
+        "wr": "51.2",
+        "trades": 242
+      },
+      {
+        "algo": "ALL; Long; bin_rsi1_chg_1m<-30",
+        "tp": 1.2,
+        "sl": 0.2,
+        "pf": 1.75,
+        "wr": "50.8",
+        "trades": 118
+      },
+      {
+        "algo": "ALL; Long; bin_pfr_chg_1m<-100",
+        "tp": 1.2,
+        "sl": 0.2,
+        "pf": 1.74,
+        "wr": "50.6",
+        "trades": 160
+      },
+      {
+        "algo": "ALL; Short; bin_rsi60_chg_5m>5",
+        "tp": 1.2,
+        "sl": 0.2,
+        "pf": 1.74,
+        "wr": "46.4",
+        "trades": 140
+      }
+    ]
+  },
+  "results": [
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_5m>1.5",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": 1.5,
+      "tradeScheme": {
+        "tp": 3,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 215,
+        "winRate": "57.7",
+        "pf": 3.06,
+        "netPnl": "309.69",
+        "avgPnl": "1.44",
+        "wins": 124,
+        "tp_count": 0
+      },
+      "score": 152.61
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_5m>2",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": 2,
+      "tradeScheme": {
+        "tp": 3,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 194,
+        "winRate": "55.7",
+        "pf": 2.87,
+        "netPnl": "265.31",
+        "avgPnl": "1.37",
+        "wins": 108,
+        "tp_count": 0
+      },
+      "score": 143.15
+    },
+    {
+      "algo": "ALL; Short; bin_rsi60_chg_10m>10",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi60_chg_10m",
+      "threshold": 10,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 148,
+        "winRate": "60.1",
+        "pf": 2.73,
+        "netPnl": "165.69",
+        "avgPnl": "1.12",
+        "wins": 89,
+        "tp_count": 0
+      },
+      "score": 136.11
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_5m>3",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": 3,
+      "tradeScheme": {
+        "tp": 3,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 176,
+        "winRate": "54.5",
+        "pf": 2.68,
+        "netPnl": "226.23",
+        "avgPnl": "1.29",
+        "wins": 96,
+        "tp_count": 0
+      },
+      "score": 134.11
+    },
+    {
+      "algo": "ALL; Long; bin_rsi1_chg_10m>60",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi1_chg_10m",
+      "threshold": 60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 478,
+        "winRate": "59.2",
+        "pf": 2.13,
+        "netPnl": "338.21",
+        "avgPnl": "0.71",
+        "wins": 283,
+        "tp_count": 3
+      },
+      "score": 131.64
+    },
+    {
+      "algo": "ALL; Long; bin_rsi1_chg_10m>100",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi1_chg_10m",
+      "threshold": 100,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 285,
+        "winRate": "59.6",
+        "pf": 2.26,
+        "netPnl": "223.56",
+        "avgPnl": "0.78",
+        "wins": 170,
+        "tp_count": 1
+      },
+      "score": 125.38
+    },
+    {
+      "algo": "ALL; Long; bin_rsi1_chg_5m>60",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi1_chg_5m",
+      "threshold": 60,
+      "tradeScheme": {
+        "tp": 3,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 290,
+        "winRate": "55.9",
+        "pf": 2.16,
+        "netPnl": "233.39",
+        "avgPnl": "0.80",
+        "wins": 162,
+        "tp_count": 0
+      },
+      "score": 120.57
+    },
+    {
+      "algo": "ALL; Short; bin_pfr_chg_10m>100",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "pfr_chg_10m",
+      "threshold": 100,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 110,
+        "winRate": "58.2",
+        "pf": 2.34,
+        "netPnl": "101.28",
+        "avgPnl": "0.92",
+        "wins": 64,
+        "tp_count": 3
+      },
+      "score": 117.66
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_5m>5",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": 5,
+      "tradeScheme": {
+        "tp": 3,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 140,
+        "winRate": "50.0",
+        "pf": 2.33,
+        "netPnl": "160.34",
+        "avgPnl": "1.15",
+        "wins": 70,
+        "tp_count": 0
+      },
+      "score": 116.6
+    },
+    {
+      "algo": "ALL; Long; bin_rsi1_chg_5m>100",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi1_chg_5m",
+      "threshold": 100,
+      "tradeScheme": {
+        "tp": 3,
+        "sl": 0.4,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 134,
+        "winRate": "56.0",
+        "pf": 2.21,
+        "netPnl": "116.67",
+        "avgPnl": "0.87",
+        "wins": 75,
+        "tp_count": 0
+      },
+      "score": 113.24
+    },
+    {
+      "algo": "ALL; Short; bin_rsi60_chg_10m>5",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi60_chg_10m",
+      "threshold": 5,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 246,
+        "winRate": "54.1",
+        "pf": 2,
+        "netPnl": "175.53",
+        "avgPnl": "0.71",
+        "wins": 133,
+        "tp_count": 0
+      },
+      "score": 110.99
+    },
+    {
+      "algo": "ALL; Short; bin_pfr_chg_10m<-60",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "pfr_chg_10m",
+      "threshold": -60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 332,
+        "winRate": "50.9",
+        "pf": 1.8,
+        "netPnl": "216.09",
+        "avgPnl": "0.65",
+        "wins": 169,
+        "tp_count": 2
+      },
+      "score": 107.19
+    },
+    {
+      "algo": "ALL; Long; bin_pfr_chg_1m<-30",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "pfr_chg_1m",
+      "threshold": -30,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 493,
+        "winRate": "50.1",
+        "pf": 1.54,
+        "netPnl": "196.64",
+        "avgPnl": "0.40",
+        "wins": 247,
+        "tp_count": 3
+      },
+      "score": 106.21
+    },
+    {
+      "algo": "ALL; Short; bin_rsi60_chg_10m>3",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi60_chg_10m",
+      "threshold": 3,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 272,
+        "winRate": "52.2",
+        "pf": 1.83,
+        "netPnl": "167.54",
+        "avgPnl": "0.62",
+        "wins": 142,
+        "tp_count": 0
+      },
+      "score": 105.18
+    },
+    {
+      "algo": "ALL; Short; bin_rsi60_chg_10m>2",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi60_chg_10m",
+      "threshold": 2,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 283,
+        "winRate": "51.2",
+        "pf": 1.76,
+        "netPnl": "159.58",
+        "avgPnl": "0.56",
+        "wins": 145,
+        "tp_count": 0
+      },
+      "score": 102.74
+    },
+    {
+      "algo": "ALL; Long; bin_tsv_chg_1m<-60",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "tsv_chg_1m",
+      "threshold": -60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 494,
+        "winRate": "49.6",
+        "pf": 1.43,
+        "netPnl": "153.30",
+        "avgPnl": "0.31",
+        "wins": 245,
+        "tp_count": 2
+      },
+      "score": 101.72
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_10m<-3",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_10m",
+      "threshold": -3,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.4,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 282,
+        "winRate": "59.9",
+        "pf": 1.67,
+        "netPnl": "108.60",
+        "avgPnl": "0.39",
+        "wins": 169,
+        "tp_count": 1
+      },
+      "score": 101.69
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_10m<-1.5",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_10m",
+      "threshold": -1.5,
+      "tradeScheme": {
+        "tp": 1.5,
+        "sl": 0.4,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 312,
+        "winRate": "60.3",
+        "pf": 1.62,
+        "netPnl": "113.24",
+        "avgPnl": "0.36",
+        "wins": 188,
+        "tp_count": 0
+      },
+      "score": 101.61
+    },
+    {
+      "algo": "ALL; Short; bin_rsi60_chg_10m>1.5",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi60_chg_10m",
+      "threshold": 1.5,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 286,
+        "winRate": "50.7",
+        "pf": 1.73,
+        "netPnl": "155.85",
+        "avgPnl": "0.54",
+        "wins": 145,
+        "tp_count": 0
+      },
+      "score": 101.57
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_10m<-2",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_10m",
+      "threshold": -2,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.4,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 310,
+        "winRate": "60.3",
+        "pf": 1.62,
+        "netPnl": "112.39",
+        "avgPnl": "0.36",
+        "wins": 187,
+        "tp_count": 1
+      },
+      "score": 101.49
+    },
+    {
+      "algo": "ALL; Short; bin_pfr_chg_10m>60",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "pfr_chg_10m",
+      "threshold": 60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 242,
+        "winRate": "51.2",
+        "pf": 1.76,
+        "netPnl": "142.78",
+        "avgPnl": "0.59",
+        "wins": 124,
+        "tp_count": 3
+      },
+      "score": 100.28
+    },
+    {
+      "algo": "ALL; Short; bin_pfr_chg_5m>30",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "pfr_chg_5m",
+      "threshold": 30,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 438,
+        "winRate": "47.7",
+        "pf": 1.48,
+        "netPnl": "172.17",
+        "avgPnl": "0.39",
+        "wins": 209,
+        "tp_count": 3
+      },
+      "score": 99.79
+    },
+    {
+      "algo": "ALL; Long; bin_pfr_chg_10m>30",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "pfr_chg_10m",
+      "threshold": 30,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 499,
+        "winRate": "46.7",
+        "pf": 1.38,
+        "netPnl": "161.27",
+        "avgPnl": "0.32",
+        "wins": 233,
+        "tp_count": 2
+      },
+      "score": 99.15
+    },
+    {
+      "algo": "ALL; Long; bin_rsi1_chg_1m>30",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi1_chg_1m",
+      "threshold": 30,
+      "tradeScheme": {
+        "tp": 1.5,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 215,
+        "winRate": "48.4",
+        "pf": 1.78,
+        "netPnl": "127.01",
+        "avgPnl": "0.59",
+        "wins": 104,
+        "tp_count": 0
+      },
+      "score": 98.62
+    },
+    {
+      "algo": "ALL; Short; bin_pfr_chg_10m<-100",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "pfr_chg_10m",
+      "threshold": -100,
+      "tradeScheme": {
+        "tp": 1.5,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 184,
+        "winRate": "49.5",
+        "pf": 1.8,
+        "netPnl": "125.06",
+        "avgPnl": "0.68",
+        "wins": 91,
+        "tp_count": 1
+      },
+      "score": 97.89
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_10m<-10",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_10m",
+      "threshold": -10,
+      "tradeScheme": {
+        "tp": 1.5,
+        "sl": 0.4,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 201,
+        "winRate": "60.7",
+        "pf": 1.69,
+        "netPnl": "76.61",
+        "avgPnl": "0.38",
+        "wins": 122,
+        "tp_count": 0
+      },
+      "score": 97.87
+    },
+    {
+      "algo": "ALL; Short; bin_tsv_chg_1m<-60",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "tsv_chg_1m",
+      "threshold": -60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 494,
+        "winRate": "45.7",
+        "pf": 1.35,
+        "netPnl": "139.73",
+        "avgPnl": "0.28",
+        "wins": 226,
+        "tp_count": 5
+      },
+      "score": 97.35
+    },
+    {
+      "algo": "ALL; Long; bin_pfr_chg_1m<-100",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "pfr_chg_1m",
+      "threshold": -100,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 160,
+        "winRate": "50.6",
+        "pf": 1.74,
+        "netPnl": "97.01",
+        "avgPnl": "0.61",
+        "wins": 81,
+        "tp_count": 3
+      },
+      "score": 94.38
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_10m<-5",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_10m",
+      "threshold": -5,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.4,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 255,
+        "winRate": "58.0",
+        "pf": 1.53,
+        "netPnl": "77.53",
+        "avgPnl": "0.30",
+        "wins": 148,
+        "tp_count": 1
+      },
+      "score": 93.9
+    },
+    {
+      "algo": "ALL; Long; bin_pfr_chg_1m<-60",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "pfr_chg_1m",
+      "threshold": -60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 290,
+        "winRate": "50.3",
+        "pf": 1.53,
+        "netPnl": "122.35",
+        "avgPnl": "0.42",
+        "wins": 146,
+        "tp_count": 3
+      },
+      "score": 93.69
+    },
+    {
+      "algo": "ALL; Short; bin_pfr_chg_10m>30",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "pfr_chg_10m",
+      "threshold": 30,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 499,
+        "winRate": "45.1",
+        "pf": 1.25,
+        "netPnl": "108.16",
+        "avgPnl": "0.22",
+        "wins": 225,
+        "tp_count": 3
+      },
+      "score": 93.47
+    },
+    {
+      "algo": "ALL; Short; bin_pfr_chg_1m<-30",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "pfr_chg_1m",
+      "threshold": -30,
+      "tradeScheme": {
+        "tp": 1.5,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 493,
+        "winRate": "44.4",
+        "pf": 1.24,
+        "netPnl": "103.68",
+        "avgPnl": "0.21",
+        "wins": 219,
+        "tp_count": 3
+      },
+      "score": 92.5
+    },
+    {
+      "algo": "ALL; Long; bin_rsi1_chg_1m<-30",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi1_chg_1m",
+      "threshold": -30,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 118,
+        "winRate": "50.8",
+        "pf": 1.75,
+        "netPnl": "62.15",
+        "avgPnl": "0.53",
+        "wins": 60,
+        "tp_count": 0
+      },
+      "score": 92.32
+    },
+    {
+      "algo": "ALL; Short; bin_rsi60_chg_5m>5",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": 5,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 140,
+        "winRate": "46.4",
+        "pf": 1.74,
+        "netPnl": "92.06",
+        "avgPnl": "0.66",
+        "wins": 65,
+        "tp_count": 0
+      },
+      "score": 91.92
+    },
+    {
+      "algo": "ALL; Short; bin_pfr_chg_5m<-60",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "pfr_chg_5m",
+      "threshold": -60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 343,
+        "winRate": "46.6",
+        "pf": 1.43,
+        "netPnl": "126.45",
+        "avgPnl": "0.37",
+        "wins": 160,
+        "tp_count": 3
+      },
+      "score": 91.76
+    },
+    {
+      "algo": "ALL; Long; bin_pfr_chg_1m>30",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "pfr_chg_1m",
+      "threshold": 30,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 409,
+        "winRate": "45.7",
+        "pf": 1.32,
+        "netPnl": "113.03",
+        "avgPnl": "0.28",
+        "wins": 187,
+        "tp_count": 2
+      },
+      "score": 91.05
+    },
+    {
+      "algo": "ALL; Short; bin_pfr_chg_5m>60",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "pfr_chg_5m",
+      "threshold": 60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 200,
+        "winRate": "47.5",
+        "pf": 1.6,
+        "netPnl": "107.37",
+        "avgPnl": "0.54",
+        "wins": 95,
+        "tp_count": 3
+      },
+      "score": 90.25
+    },
+    {
+      "algo": "ALL; Long; bin_pfr_chg_5m>30",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "pfr_chg_5m",
+      "threshold": 30,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 438,
+        "winRate": "43.4",
+        "pf": 1.21,
+        "netPnl": "85.28",
+        "avgPnl": "0.19",
+        "wins": 190,
+        "tp_count": 1
+      },
+      "score": 87.7
+    },
+    {
+      "algo": "ALL; Short; bin_rsi1_chg_5m<-30",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi1_chg_5m",
+      "threshold": -30,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 410,
+        "winRate": "47.1",
+        "pf": 1.22,
+        "netPnl": "68.08",
+        "avgPnl": "0.17",
+        "wins": 193,
+        "tp_count": 0
+      },
+      "score": 87.53
+    },
+    {
+      "algo": "ALL; Short; bin_pfr_chg_1m>30",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "pfr_chg_1m",
+      "threshold": 30,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 409,
+        "winRate": "43.0",
+        "pf": 1.25,
+        "netPnl": "92.43",
+        "avgPnl": "0.23",
+        "wins": 176,
+        "tp_count": 4
+      },
+      "score": 87.44
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_10m>1.5",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_10m",
+      "threshold": 1.5,
+      "tradeScheme": {
+        "tp": 3,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 286,
+        "winRate": "45.5",
+        "pf": 1.4,
+        "netPnl": "99.53",
+        "avgPnl": "0.35",
+        "wins": 130,
+        "tp_count": 0
+      },
+      "score": 86.81
+    },
+    {
+      "algo": "ALL; Long; bin_rsi1_chg_10m<-60",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi1_chg_10m",
+      "threshold": -60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 172,
+        "winRate": "50.6",
+        "pf": 1.51,
+        "netPnl": "62.59",
+        "avgPnl": "0.36",
+        "wins": 87,
+        "tp_count": 0
+      },
+      "score": 85.9
+    },
+    {
+      "algo": "ALL; Long; bin_pfr_chg_5m<-60",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "pfr_chg_5m",
+      "threshold": -60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 343,
+        "winRate": "43.4",
+        "pf": 1.3,
+        "netPnl": "90.37",
+        "avgPnl": "0.26",
+        "wins": 149,
+        "tp_count": 5
+      },
+      "score": 85.6
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_5m<-1.5",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": -1.5,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.4,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 196,
+        "winRate": "57.1",
+        "pf": 1.41,
+        "netPnl": "55.32",
+        "avgPnl": "0.28",
+        "wins": 112,
+        "tp_count": 0
+      },
+      "score": 85.29
+    },
+    {
+      "algo": "ALL; Short; bin_pfr_chg_1m<-60",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "pfr_chg_1m",
+      "threshold": -60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 290,
+        "winRate": "43.4",
+        "pf": 1.37,
+        "netPnl": "95.37",
+        "avgPnl": "0.33",
+        "wins": 126,
+        "tp_count": 3
+      },
+      "score": 85.22
+    },
+    {
+      "algo": "ALL; Long; bin_pfr_chg_10m<-100",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "pfr_chg_10m",
+      "threshold": -100,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 184,
+        "winRate": "45.1",
+        "pf": 1.5,
+        "netPnl": "80.50",
+        "avgPnl": "0.44",
+        "wins": 83,
+        "tp_count": 4
+      },
+      "score": 84.57
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_10m>2",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_10m",
+      "threshold": 2,
+      "tradeScheme": {
+        "tp": 3,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 283,
+        "winRate": "44.9",
+        "pf": 1.35,
+        "netPnl": "87.55",
+        "avgPnl": "0.31",
+        "wins": 127,
+        "tp_count": 0
+      },
+      "score": 84.45
+    },
+    {
+      "algo": "ALL; Long; bin_pfr_chg_5m<-100",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "pfr_chg_5m",
+      "threshold": -100,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 181,
+        "winRate": "44.8",
+        "pf": 1.47,
+        "netPnl": "76.31",
+        "avgPnl": "0.42",
+        "wins": 81,
+        "tp_count": 3
+      },
+      "score": 83.1
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_10m>3",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_10m",
+      "threshold": 3,
+      "tradeScheme": {
+        "tp": 3,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 272,
+        "winRate": "44.1",
+        "pf": 1.33,
+        "netPnl": "81.68",
+        "avgPnl": "0.30",
+        "wins": 120,
+        "tp_count": 0
+      },
+      "score": 82.75
+    },
+    {
+      "algo": "ALL; Long; bin_rsi1_chg_5m<-30",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi1_chg_5m",
+      "threshold": -30,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 410,
+        "winRate": "44.1",
+        "pf": 1.12,
+        "netPnl": "38.55",
+        "avgPnl": "0.09",
+        "wins": 181,
+        "tp_count": 1
+      },
+      "score": 82.63
+    },
+    {
+      "algo": "ALL; Long; bin_pfr_chg_1m>60",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "pfr_chg_1m",
+      "threshold": 60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 172,
+        "winRate": "43.6",
+        "pf": 1.46,
+        "netPnl": "75.83",
+        "avgPnl": "0.44",
+        "wins": 75,
+        "tp_count": 2
+      },
+      "score": 81.8
+    },
+    {
+      "algo": "ALL; Long; bin_pfr_chg_10m<-60",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "pfr_chg_10m",
+      "threshold": -60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 332,
+        "winRate": "41.9",
+        "pf": 1.22,
+        "netPnl": "67.23",
+        "avgPnl": "0.20",
+        "wins": 139,
+        "tp_count": 4
+      },
+      "score": 81.29
+    },
+    {
+      "algo": "ALL; Short; bin_pfr_chg_1m>60",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "pfr_chg_1m",
+      "threshold": 60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 172,
+        "winRate": "40.7",
+        "pf": 1.44,
+        "netPnl": "76.09",
+        "avgPnl": "0.44",
+        "wins": 70,
+        "tp_count": 4
+      },
+      "score": 80.13
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_5m<-10",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": -10,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.4,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 100,
+        "winRate": "59.0",
+        "pf": 1.4,
+        "netPnl": "26.44",
+        "avgPnl": "0.26",
+        "wins": 59,
+        "tp_count": 0
+      },
+      "score": 79.7
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_5m<-2",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": -2,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.4,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 180,
+        "winRate": "56.1",
+        "pf": 1.28,
+        "netPnl": "37.44",
+        "avgPnl": "0.21",
+        "wins": 101,
+        "tp_count": 0
+      },
+      "score": 78.83
+    },
+    {
+      "algo": "ALL; Short; bin_rsi60_chg_5m>3",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": 3,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 176,
+        "winRate": "41.5",
+        "pf": 1.37,
+        "netPnl": "63.85",
+        "avgPnl": "0.36",
+        "wins": 73,
+        "tp_count": 0
+      },
+      "score": 77.81
+    },
+    {
+      "algo": "ALL; Short; bin_rsi1_chg_1m>30",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi1_chg_1m",
+      "threshold": 30,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 215,
+        "winRate": "45.1",
+        "pf": 1.22,
+        "netPnl": "39.74",
+        "avgPnl": "0.18",
+        "wins": 97,
+        "tp_count": 2
+      },
+      "score": 75.23
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_10m>5",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_10m",
+      "threshold": 5,
+      "tradeScheme": {
+        "tp": 3,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 246,
+        "winRate": "42.7",
+        "pf": 1.19,
+        "netPnl": "43.63",
+        "avgPnl": "0.18",
+        "wins": 105,
+        "tp_count": 0
+      },
+      "score": 75.17
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_5m<-5",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": -5,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.4,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 125,
+        "winRate": "54.4",
+        "pf": 1.27,
+        "netPnl": "23.00",
+        "avgPnl": "0.18",
+        "wins": 68,
+        "tp_count": 0
+      },
+      "score": 74.62
+    },
+    {
+      "algo": "ALL; Short; bin_rsi60_chg_5m>2",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": 2,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 194,
+        "winRate": "40.2",
+        "pf": 1.27,
+        "netPnl": "53.71",
+        "avgPnl": "0.28",
+        "wins": 78,
+        "tp_count": 0
+      },
+      "score": 74.5
+    },
+    {
+      "algo": "ALL; Short; bin_pfr_chg_5m<-100",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "pfr_chg_5m",
+      "threshold": -100,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 181,
+        "winRate": "43.6",
+        "pf": 1.2,
+        "netPnl": "35.95",
+        "avgPnl": "0.20",
+        "wins": 79,
+        "tp_count": 0
+      },
+      "score": 71.94
+    },
+    {
+      "algo": "ALL; Short; bin_pfr_chg_1m<-100",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "pfr_chg_1m",
+      "threshold": -100,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 160,
+        "winRate": "41.9",
+        "pf": 1.24,
+        "netPnl": "37.83",
+        "avgPnl": "0.24",
+        "wins": 67,
+        "tp_count": 2
+      },
+      "score": 71.77
+    },
+    {
+      "algo": "ALL; Long; bin_rsi60_chg_5m<-3",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": -3,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.4,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 154,
+        "winRate": "53.2",
+        "pf": 1.15,
+        "netPnl": "17.34",
+        "avgPnl": "0.11",
+        "wins": 82,
+        "tp_count": 0
+      },
+      "score": 71.2
+    },
+    {
+      "algo": "ALL; Short; bin_rsi60_chg_5m<-3",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": -3,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.6,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 154,
+        "winRate": "44.8",
+        "pf": 1.21,
+        "netPnl": "29.03",
+        "avgPnl": "0.19",
+        "wins": 69,
+        "tp_count": 7
+      },
+      "score": 71.08
+    },
+    {
+      "algo": "ALL; Long; bin_pfr_chg_5m>60",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "pfr_chg_5m",
+      "threshold": 60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 200,
+        "winRate": "41.5",
+        "pf": 1.15,
+        "netPnl": "29.48",
+        "avgPnl": "0.15",
+        "wins": 83,
+        "tp_count": 1
+      },
+      "score": 70.45
+    },
+    {
+      "algo": "ALL; Short; bin_rsi60_chg_5m<-2",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": -2,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.6,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 180,
+        "winRate": "42.2",
+        "pf": 1.15,
+        "netPnl": "25.66",
+        "avgPnl": "0.14",
+        "wins": 76,
+        "tp_count": 9
+      },
+      "score": 69.46
+    },
+    {
+      "algo": "ALL; Short; bin_rsi60_chg_5m>1.5",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": 1.5,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 215,
+        "winRate": "37.7",
+        "pf": 1.13,
+        "netPnl": "28.46",
+        "avgPnl": "0.13",
+        "wins": 81,
+        "tp_count": 0
+      },
+      "score": 69.41
+    },
+    {
+      "algo": "ALL; Long; bin_pfr_chg_10m>60",
+      "direction": "Long",
+      "exchange": "bin",
+      "param": "pfr_chg_10m",
+      "threshold": 60,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 242,
+        "winRate": "38.8",
+        "pf": 1.05,
+        "netPnl": "13.15",
+        "avgPnl": "0.05",
+        "wins": 94,
+        "tp_count": 2
+      },
+      "score": 68.16
+    },
+    {
+      "algo": "ALL; Short; bin_rsi60_chg_5m<-1.5",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": -1.5,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.6,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 196,
+        "winRate": "41.3",
+        "pf": 1.04,
+        "netPnl": "8.24",
+        "avgPnl": "0.04",
+        "wins": 81,
+        "tp_count": 9
+      },
+      "score": 65.75
+    },
+    {
+      "algo": "ALL; Short; bin_rsi1_chg_1m<-30",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi1_chg_1m",
+      "threshold": -30,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.2,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 118,
+        "winRate": "43.2",
+        "pf": 1.05,
+        "netPnl": "5.87",
+        "avgPnl": "0.05",
+        "wins": 51,
+        "tp_count": 1
+      },
+      "score": 62.04
+    },
+    {
+      "algo": "ALL; Short; bin_rsi60_chg_5m<-10",
+      "direction": "Short",
+      "exchange": "bin",
+      "param": "rsi60_chg_5m",
+      "threshold": -10,
+      "tradeScheme": {
+        "tp": 1.2,
+        "sl": 0.6,
+        "algoWindow": 30,
+        "tradeWindow": 10,
+        "posVal": 1000
+      },
+      "stats": {
+        "trades": 100,
+        "winRate": "40.0",
+        "pf": 1.04,
+        "netPnl": "3.42",
+        "avgPnl": "0.03",
+        "wins": 40,
+        "tp_count": 4
+      },
+      "score": 59.6
+    }
+  ]
+}

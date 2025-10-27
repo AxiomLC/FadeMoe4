@@ -26,6 +26,7 @@ const PARALLEL_SYMBOLS = 8;            // Process 8 symbols concurrently
 
 const EXCHANGES = ['bin', 'byb', 'okx'];
 
+// existing code ...
 // ============================================================================
 // UTILITIES
 // ============================================================================
@@ -70,6 +71,25 @@ function getWindowMajoritySide(windowData) {
   if (shortQty > longQty) return 'short';
 
   return null; // True tie, no clear majority
+}
+
+// ============================================================================
+// GRACEFUL SHUTDOWN (Top-Level - Add Once on Module Load)
+// ============================================================================
+let runInterval = null;  // Global for clear
+
+async function gracefulShutdown(signal) {
+  console.log(`\n⚠️  Received ${signal}, shutting down gracefully...`);
+  if (runInterval) clearInterval(runInterval);
+  await logStatus('stopped', `${SCRIPT_NAME} stopped by ${signal}.`);
+  await dbManager.close();
+  process.exit(0);
+}
+
+// Add listeners once at module level (outside functions; guard against duplicates)
+if (!process.listeners('SIGINT').length) {
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
 // ============================================================================
@@ -363,8 +383,7 @@ async function calculateAllMetrics() {
 }
 
 // ============================================================================
-// CONTINUOUS RUN MODE
-// Runs backfill once, then continuous 1-minute calculations
+// CONTINUOUS RUN MODE (Updated - Remove Duplicate Listeners)
 // ============================================================================
 async function runContinuously() {
   console.log(`\n🔄 Starting ${SCRIPT_NAME} in continuous mode...`);
@@ -378,16 +397,16 @@ async function runContinuously() {
     await backfiller.runBackfill();
     console.log('\n✅ Backfill complete - starting real-time metrics...\n');
   } catch (error) {
-  const summary = `Backfill failed: ${error.code} - ${error.message} (line ${error.position || 'unknown'})`;
-  console.error('💥', summary);  // Short: code + msg only
-  await dbManager.logError(SCRIPT_NAME, 'backfill_error', 'BACKFILL_FAIL', 
-    summary, { code: error.code, position: error.position });  // Log details separately
-}
+    const summary = `Backfill failed: ${error.code} - ${error.message} (line ${error.position || 'unknown'})`;
+    console.error('💥', summary);  // Short summary
+    await dbManager.logError(SCRIPT_NAME, 'backfill_error', 'BACKFILL_FAIL', 
+      summary, { code: error.code, position: error.position });  // Log details
+  }
 
   await logStatus('running', `${SCRIPT_NAME} continuous mode started.`);
 
   // Run calculation every minute
-  const runInterval = setInterval(async () => {
+  runInterval = setInterval(async () => {
     try {
       await calculateAllMetrics();
     } catch (error) {
@@ -395,24 +414,12 @@ async function runContinuously() {
     }
   }, CALCULATION_INTERVAL_MS);
 
-  // Graceful cleanup
+  // Graceful cleanup (moved listeners to top-level)
   const cleanup = (signal) => {
     clearInterval(runInterval);
     gracefulShutdown(signal);
   };
-
-  process.on('SIGTERM', () => cleanup('SIGTERM'));
-  process.on('SIGINT', () => cleanup('SIGINT'));
-}
-
-// ============================================================================
-// GRACEFUL SHUTDOWN
-// ============================================================================
-async function gracefulShutdown(signal) {
-  console.log(`\n⚠️  Received ${signal}, shutting down gracefully...`);
-  await logStatus('stopped', `${SCRIPT_NAME} stopped by ${signal}.`);
-  await dbManager.close(); // From optimized dbsetup
-  process.exit(0);
+  // Remove old process.on calls from here - already at top-level
 }
 
 // ============================================================================

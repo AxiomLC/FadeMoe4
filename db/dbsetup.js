@@ -174,10 +174,19 @@ await this.pool.query(
       console.log('  - Created table: perp_metrics');
 
       // Indexes for performance
-      await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_pfr_chg_5m ON perp_metrics(pfr_chg_5m)`);
-      await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_oi_chg_5m ON perp_metrics(oi_chg_5m)`);
-      await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_v_chg_10m ON perp_metrics(v_chg_10m)`);
-      console.log('  - Created indexes on perp_metrics');
+      const indexQueries = [
+        'oi_chg_1m', 'oi_chg_5m', 'oi_chg_10m',
+        'pfr_chg_1m', 'pfr_chg_5m', 'pfr_chg_10m',
+        'lsr_chg_1m', 'lsr_chg_5m', 'lsr_chg_10m',
+        'rsi1_chg_1m', 'rsi1_chg_5m', 'rsi1_chg_10m',
+        'rsi60_chg_1m', 'rsi60_chg_5m', 'rsi60_chg_10m',
+        'tbv_chg_1m', 'tbv_chg_5m', 'tbv_chg_10m',
+        'tsv_chg_1m', 'tsv_chg_5m', 'tsv_chg_10m'
+      ].map(param => `CREATE INDEX IF NOT EXISTS idx_perp_metrics_${param} ON perp_metrics (${param})`);
+      for (const query of indexQueries) {
+        await this.pool.query(query);
+        console.log(`  - Created index for ${query.split('ON perp_metrics (')[1].split(')')[0]}`);
+      }
 
       // perp_status: Unchanged
       await this.pool.query(`
@@ -445,7 +454,7 @@ async setupRetentionPolicies() {
 
     let totalRowCount = 0;
     // Insert in chunks of 100k (big loop for high flow; retry per chunk)
-    const chunkSize = 100000;
+    const chunkSize = 50000;
     for (let i = 0; i < values.length; i += chunkSize) {
       const chunk = values.slice(i, i + chunkSize);
       const chunkQuery = format(

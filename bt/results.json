@@ -1,0 +1,13 @@
+{
+  "stats": {
+    "total": 0,
+    "wins": 0,
+    "losses": 0,
+    "tp1": 0,
+    "tp2": 0,
+    "winRate": "0.0%",
+    "pf": 0
+  },
+  "trades": [],
+  "bestScheme": null
+}

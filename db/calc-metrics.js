@@ -22,7 +22,7 @@ const LOOKBACK_MINUTES = 15;
 const WINDOW_SIZES = [1, 5, 10];
 const CALCULATION_INTERVAL_MS = 60000; // 1 minute
 const HEARTBEAT_INTERVAL_MS = 60000;   // 1 minute status update
-const PARALLEL_SYMBOLS = 8;            // Process 8 symbols concurrently
+const PARALLEL_SYMBOLS = 3;            // Process 8 symbols concurrently
 
 const EXCHANGES = ['bin', 'byb', 'okx'];
 
@@ -43,7 +43,7 @@ function calculatePercentChange(current, previous) {
   if (previous === null || previous === undefined || previous === 0) return null;
   if (current === null || current === undefined) return null;
   const change = ((current - previous) / Math.abs(previous)) * 100;
-  return Math.min(Math.max(parseFloat(change.toFixed(4)), -99.9999), 99.9999);
+  return Math.min(Math.max(parseFloat(change.toFixed(3)), -9999.999), 9999.999); // Changed from 4 decimals to 3
 }
 
 // Helper: Get majority lqside over a window (count + qty-weighted tie-breaker)
@@ -130,58 +130,30 @@ async function fetchAndAggregateData(symbol, startTs, endTs) {
         tbv: row.tbv ? parseFloat(row.tbv) : null,
         tsv: row.tsv ? parseFloat(row.tsv) : null
       })));
+
+
+
     } catch (error) {
       console.error(`Error fetching data for ${exchange} ${symbol}:`, error.message);
     }
   }
 
-  if (allData.length === 0) return { bin: [], byb: [], okx: [] };
+  //============================================================================
+if (allData.length === 0) return { bin: [], byb: [], okx: [] };
 
-  // Group by ts and exchange; merge fields (unified: check field presence)
-  const grouped = { bin: {}, byb: {}, okx: {} };
+  // Group by exchange (no merging - use raw rows like backfill)
+  const grouped = { bin: [], byb: [], okx: [] };
   
   allData.forEach(row => {
-    const ts = row.ts;
-    const exchange = row.exchange;
-
-    // Initialize row for this ts/exchange
-    if (!grouped[exchange][ts]) {
-      grouped[exchange][ts] = { 
-        ts, symbol: row.symbol, exchange,
-        o: null, h: null, l: null, c: null, v: null,
-        oi: null, pfr: null, lsr: null,
-        rsi1: null, rsi60: null,
-        tbv: null, tsv: null,
-        lqside: null, lqprice: null, lqqty: null
-      };
-    }
-
-    const targetRow = grouped[exchange][ts];
-
-    // Merge based on field presence (unified schema)
-    if (row.o !== null) { // OHLCV
-      targetRow.o = row.o; targetRow.h = row.h; targetRow.l = row.l; 
-      targetRow.c = row.c; targetRow.v = row.v; 
-    }
-    if (row.oi !== null) targetRow.oi = row.oi;
-    if (row.pfr !== null) targetRow.pfr = row.pfr;
-    if (row.lsr !== null) targetRow.lsr = row.lsr;
-    if (row.rsi1 !== null) { // RSI (bin-only, but applied here if present)
-      targetRow.rsi1 = row.rsi1; targetRow.rsi60 = row.rsi60;
-    }
-    if (row.tbv !== null) { targetRow.tbv = row.tbv; targetRow.tsv = row.tsv; }
-    if (row.lqside !== null) { 
-      targetRow.lqside = row.lqside; targetRow.lqprice = row.lqprice; targetRow.lqqty = row.lqqty; 
-    }
+    grouped[row.exchange].push(row);
   });
 
   return {
-    bin: Object.values(grouped.bin).sort((a, b) => a.ts - b.ts),
-    byb: Object.values(grouped.byb).sort((a, b) => a.ts - b.ts),
-    okx: Object.values(grouped.okx).sort((a, b) => a.ts - b.ts)
+    bin: grouped.bin.sort((a, b) => a.ts - b.ts),
+    byb: grouped.byb.sort((a, b) => a.ts - b.ts),
+    okx: grouped.okx.sort((a, b) => a.ts - b.ts)
   };
 }
-
 // ============================================================================
 // CALCULATE METRICS FOR AN EXCHANGE DATASET
 // ============================================================================

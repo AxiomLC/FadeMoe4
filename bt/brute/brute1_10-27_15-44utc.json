@@ -1,0 +1,69 @@
+{
+  "metadata": {
+    "script": "brute2.js",
+    "timestamp": "2025-10-27T15:44:41.292Z",
+    "runtime": "0.3 minutes",
+    "config": {
+      "corePercent": [
+        1.5,
+        3,
+        5,
+        10,
+        30,
+        60,
+        100,
+        200
+      ],
+      "detection": {
+        "algoWindow": 60,
+        "minTrades": 30,
+        "maxTrades": 400
+      },
+      "tradeExecution": {
+        "tradeWindow": 20,
+        "posVal": 1000,
+        "tpPerc": [
+          1.2,
+          1.5,
+          2,
+          2.5,
+          3,
+          3.3
+        ],
+        "slPerc": [
+          0.4,
+          0.6,
+          1,
+          1.2
+        ]
+      },
+      "targetSymbols": {
+        "useAll": true,
+        "list": [
+          "BTC",
+          "ETH",
+          "SOL",
+          "DOGE",
+          "XRP"
+        ]
+      },
+      "maxSamples": 10000,
+      "params": [
+        "oi_chg_1m",
+        "oi_chg_5m",
+        "oi_chg_10m"
+      ],
+      "exchanges": [
+        "bin"
+      ],
+      "outputTop": 100,
+      "concurrencyLimit": 40
+    }
+  },
+  "summary": {
+    "overview": "Tested 16 thresholds × 3 params × 1 exchanges × 2 directions = 2304 total tests, 0 profitable patterns found (PF > 1.0)",
+    "scoreFormula": "Score = (WinRate/100 * 30) + (PF * 40) + (min(trades/maxTrades, 1) * 30)",
+    "topByProfitFactor": []
+  },
+  "results": []
+}
