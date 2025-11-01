@@ -93,7 +93,7 @@ async function pollLSR(baseSymbol, config) {
     if (!connectedPerpspecs.has(perpspec) && rawData) {
       connectedPerpspecs.add(perpspec);
       if (connectedPerpspecs.size === PERPSPECS.length) {
-        const message = `🍾 ${PERPSPECS.join(', ')} connected; fetching.`;
+        const message = `🚥 ${PERPSPECS.join(', ')} connected; fetching.`;
         await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', message);
         console.log(`${STATUS_COLOR}${message}${RESET}`);
       }
@@ -162,7 +162,7 @@ async function pollLSR(baseSymbol, config) {
     if (completedPulls.get(perpspec).size === expectedCount) {
       const message = `${perpspec} 1m pull.`;
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message, { perpspec });
-      console.log(`${STATUS_COLOR}${message}${RESET}`);
+      console.log(`🚥 ${STATUS_COLOR}${message}${RESET}`);
       completedPulls.get(perpspec).clear(); // Reset for next 1m cycle
     }
 
@@ -250,7 +250,7 @@ async function pollAllSymbols() {
         if (completedPulls.get(perpspec).size === expectedCount) {
           const message = `${perpspec} 1m pull.`;
           await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message, { perpspec });
-          console.log(`${STATUS_COLOR}${message}${RESET}`);
+          console.log(`🚥 ${STATUS_COLOR}${message}${RESET}`);
           completedPulls.get(perpspec).clear(); // Reset for next 1m cycle
         }
       } catch (error) {
@@ -280,7 +280,7 @@ async function pollAllSymbols() {
 async function execute() {
   // Log #1: Script start
   const totalSymbols = perpList.length;
-  const startMessage = `🍾 Starting ${SCRIPT_NAME} real-time 1m pull; ${totalSymbols} symbols.`;
+  const startMessage = `🚦 *LSR Starting ${SCRIPT_NAME} real-time 1m pull; ${totalSymbols} symbols.`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', startMessage);
   console.log(`${STATUS_COLOR}${startMessage}${RESET}`);
 

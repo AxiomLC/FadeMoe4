@@ -1,8 +1,10 @@
 // ============================================================================
-// METRICS CALCULATOR  calc-metrics.js  22 Oct 2025 (UNIFIED SCHEMA)
+// METRICS CALCULATOR  calc-metrics.js  31 Oct 2025 (MEMORY OPTIMIZED)
 // Calculates rolling % changes for all parameters across all exchanges (bin, byb, okx)
 // Runs every 1 minute to keep perp_metrics table fresh for backtester
 // Uses unified queries (by exchange + field presence); ON CONFLICT DO UPDATE for upserts
+//
+// MEMORY FIX: Batch inserts per N symbols instead of accumulating all globally
 // ============================================================================
 
 const dbManager = require('./dbsetup');
@@ -15,18 +17,22 @@ const STATUS_LOG_COLOR = '\x1b[38;2;147;112;219m'; // Purple
 const COLOR_RESET = '\x1b[0m';
 
 // ============================================================================
-// USER CONFIGURATION
+// USER CONFIGURATION - TUNE FOR YOUR SYSTEM
 // ============================================================================
 const DB_RETENTION_DAYS = 10;
 const LOOKBACK_MINUTES = 15;
-const WINDOW_SIZES = [1, 5, 10];
 const CALCULATION_INTERVAL_MS = 60000; // 1 minute
-const HEARTBEAT_INTERVAL_MS = 60000;   // 1 minute status update
-const PARALLEL_SYMBOLS = 3;            // Process 8 symbols concurrently
+const HEARTBEAT_INTERVAL_MS = 15000;   // 1 minute status update
+
+// BATCH CONTROL - Adjust these to balance speed vs memory:
+// - SYMBOL_BATCH_SIZE: How many symbols to process before inserting (1 = insert per symbol, 3 = every 3 symbols)
+// - INSERT_CHUNK_SIZE: Max rows per DB insert (not used in calc-metrics, kept for consistency)
+// - PARALLEL_SYMBOLS: How many symbols to process at once (more = faster but more memory)
+const SYMBOL_BATCH_SIZE = 2;      // Insert after every N symbols (1-6 recommended; 2=balanced)
+const PARALLEL_SYMBOLS = 3;       // Concurrent symbols (2-8 recommended; 3=balanced for continuous)
 
 const EXCHANGES = ['bin', 'byb', 'okx'];
 
-// existing code ...
 // ============================================================================
 // UTILITIES
 // ============================================================================
@@ -43,34 +49,7 @@ function calculatePercentChange(current, previous) {
   if (previous === null || previous === undefined || previous === 0) return null;
   if (current === null || current === undefined) return null;
   const change = ((current - previous) / Math.abs(previous)) * 100;
-  return Math.min(Math.max(parseFloat(change.toFixed(3)), -9999.999), 9999.999); // Changed from 4 decimals to 3
-}
-
-// Helper: Get majority lqside over a window (count + qty-weighted tie-breaker)
-function getWindowMajoritySide(windowData) {
-  if (!windowData || windowData.length === 0) return null;
-
-  let longCount = 0, shortCount = 0;
-  let longQty = 0, shortQty = 0;
-
-  for (const row of windowData) {
-    if (row.lqside === 'long') {
-      longCount++;
-      if (row.lqqty) longQty += row.lqqty;
-    } else if (row.lqside === 'short') {
-      shortCount++;
-      if (row.lqqty) shortQty += row.lqqty;
-    }
-  }
-
-  if (longCount > shortCount) return 'long';
-  if (shortCount > longCount) return 'short';
-
-  // Tie: Use qty-weighted
-  if (longQty > shortQty) return 'long';
-  if (shortQty > longQty) return 'short';
-
-  return null; // True tie, no clear majority
+  return Math.min(Math.max(parseFloat(change.toFixed(3)), -9999.999), 9999.999);
 }
 
 // ============================================================================
@@ -103,7 +82,7 @@ async function fetchAndAggregateData(symbol, startTs, endTs) {
     // Base query for all fields in range
     const baseQuery = `
       SELECT ts, symbol, exchange, o, h, l, c, v, oi, pfr, lsr, 
-             lqside, lqprice, lqqty, rsi1, rsi60, tbv, tsv
+             lql, lqs, rsi1, rsi60, tbv, tsv
       FROM perp_data
       WHERE symbol = $1 AND exchange = $2 AND ts >= $3 AND ts <= $4
       ORDER BY ts ASC
@@ -122,24 +101,19 @@ async function fetchAndAggregateData(symbol, startTs, endTs) {
         oi: row.oi ? parseFloat(row.oi) : null,
         pfr: row.pfr ? parseFloat(row.pfr) : null,
         lsr: row.lsr ? parseFloat(row.lsr) : null,
-        lqside: row.lqside || null,
-        lqprice: row.lqprice ? parseFloat(row.lqprice) : null,
-        lqqty: row.lqqty ? parseFloat(row.lqqty) : null,
+        lql: row.lql ? parseFloat(row.lql) : null,
+        lqs: row.lqs ? parseFloat(row.lqs) : null,
         rsi1: row.rsi1 ? parseFloat(row.rsi1) : null,
         rsi60: row.rsi60 ? parseFloat(row.rsi60) : null,
         tbv: row.tbv ? parseFloat(row.tbv) : null,
         tsv: row.tsv ? parseFloat(row.tsv) : null
       })));
-
-
-
     } catch (error) {
       console.error(`Error fetching data for ${exchange} ${symbol}:`, error.message);
     }
   }
 
-  //============================================================================
-if (allData.length === 0) return { bin: [], byb: [], okx: [] };
+  if (allData.length === 0) return { bin: [], byb: [], okx: [] };
 
   // Group by exchange (no merging - use raw rows like backfill)
   const grouped = { bin: [], byb: [], okx: [] };
@@ -154,6 +128,7 @@ if (allData.length === 0) return { bin: [], byb: [], okx: [] };
     okx: grouped.okx.sort((a, b) => a.ts - b.ts)
   };
 }
+
 // ============================================================================
 // CALCULATE METRICS FOR AN EXCHANGE DATASET
 // ============================================================================
@@ -173,19 +148,19 @@ function calculateMetricsForExchange(data) {
       oi: current.oi, pfr: current.pfr, lsr: current.lsr,
       rsi1: current.rsi1, rsi60: current.rsi60,
       tbv: current.tbv, tsv: current.tsv,
-      lqside: current.lqside, lqprice: current.lqprice, lqqty: current.lqqty,
+      lql: current.lql, lqs: current.lqs,
       // 1m changes
       c_chg_1m: null, v_chg_1m: null, oi_chg_1m: null, pfr_chg_1m: null, lsr_chg_1m: null,
       rsi1_chg_1m: null, rsi60_chg_1m: null, tbv_chg_1m: null, tsv_chg_1m: null,
-      lqside_chg_1m: null, lqprice_chg_1m: null, lqqty_chg_1m: null,
+      lql_chg_1m: null, lqs_chg_1m: null,
       // 5m changes
       c_chg_5m: null, v_chg_5m: null, oi_chg_5m: null, pfr_chg_5m: null, lsr_chg_5m: null,
       rsi1_chg_5m: null, rsi60_chg_5m: null, tbv_chg_5m: null, tsv_chg_5m: null,
-      lqside_chg_5m: null, lqprice_chg_5m: null, lqqty_chg_5m: null,
+      lql_chg_5m: null, lqs_chg_5m: null,
       // 10m changes
       c_chg_10m: null, v_chg_10m: null, oi_chg_10m: null, pfr_chg_10m: null, lsr_chg_10m: null,
       rsi1_chg_10m: null, rsi60_chg_10m: null, tbv_chg_10m: null, tsv_chg_10m: null,
-      lqside_chg_10m: null, lqprice_chg_10m: null, lqqty_chg_10m: null
+      lql_chg_10m: null, lqs_chg_10m: null
     };
 
     // 1m changes
@@ -200,9 +175,8 @@ function calculateMetricsForExchange(data) {
       metricRow.rsi60_chg_1m = calculatePercentChange(current.rsi60, prev.rsi60);
       metricRow.tbv_chg_1m = calculatePercentChange(current.tbv, prev.tbv);
       metricRow.tsv_chg_1m = calculatePercentChange(current.tsv, prev.tsv);
-      metricRow.lqside_chg_1m = (current.lqside !== prev.lqside) ? current.lqside : null;
-      metricRow.lqprice_chg_1m = calculatePercentChange(current.lqprice, prev.lqprice);
-      metricRow.lqqty_chg_1m = calculatePercentChange(current.lqqty, prev.lqqty);
+      metricRow.lql_chg_1m = calculatePercentChange(current.lql, prev.lql);
+      metricRow.lqs_chg_1m = calculatePercentChange(current.lqs, prev.lqs);
     }
 
     // 5m changes
@@ -217,12 +191,8 @@ function calculateMetricsForExchange(data) {
       metricRow.rsi60_chg_5m = calculatePercentChange(current.rsi60, prev.rsi60);
       metricRow.tbv_chg_5m = calculatePercentChange(current.tbv, prev.tbv);
       metricRow.tsv_chg_5m = calculatePercentChange(current.tsv, prev.tsv);
-      metricRow.lqside_chg_5m = (current.lqside !== prev.lqside) ? current.lqside : null;
-      metricRow.lqprice_chg_5m = calculatePercentChange(current.lqprice, prev.lqprice);
-      metricRow.lqqty_chg_5m = calculatePercentChange(current.lqqty, prev.lqqty);
-      // Window majority for lqside_chg_5m (over last 5 rows, including current)
-      const window5 = data.slice(Math.max(0, i - 4), i + 1);
-      metricRow.lqside_chg_5m = getWindowMajoritySide(window5);
+      metricRow.lql_chg_5m = calculatePercentChange(current.lql, prev.lql);
+      metricRow.lqs_chg_5m = calculatePercentChange(current.lqs, prev.lqs);
     }
 
     // 10m changes
@@ -237,12 +207,8 @@ function calculateMetricsForExchange(data) {
       metricRow.rsi60_chg_10m = calculatePercentChange(current.rsi60, prev.rsi60);
       metricRow.tbv_chg_10m = calculatePercentChange(current.tbv, prev.tbv);
       metricRow.tsv_chg_10m = calculatePercentChange(current.tsv, prev.tsv);
-      metricRow.lqside_chg_10m = (current.lqside !== prev.lqside) ? current.lqside : null;
-      metricRow.lqprice_chg_10m = calculatePercentChange(current.lqprice, prev.lqprice);
-      metricRow.lqqty_chg_10m = calculatePercentChange(current.lqqty, prev.lqqty);
-      // Window majority for lqside_chg_10m (over last 10 rows, including current)
-      const window10 = data.slice(Math.max(0, i - 9), i + 1);
-      metricRow.lqside_chg_10m = getWindowMajoritySide(window10);
+      metricRow.lql_chg_10m = calculatePercentChange(current.lql, prev.lql);
+      metricRow.lqs_chg_10m = calculatePercentChange(current.lqs, prev.lqs);
     }
 
     metrics.push(metricRow);
@@ -252,13 +218,12 @@ function calculateMetricsForExchange(data) {
 }
 
 // ============================================================================
-// PROCESS SINGLE SYMBOL (for parallel execution)
+// PROCESS SINGLE SYMBOL (Returns metrics for batching)
 // ============================================================================
 async function processSymbol(symbol, startTs, endTs) {
   try {
     const aggregatedData = await fetchAndAggregateData(symbol, startTs, endTs);
-    let metricsInserted = 0;
-    let allExchangeMetrics = [];  // Collect metrics from all exchanges for this symbol
+    let allExchangeMetrics = [];
 
     for (const exchange of EXCHANGES) {
       const data = aggregatedData[exchange];
@@ -266,23 +231,21 @@ async function processSymbol(symbol, startTs, endTs) {
 
       const metrics = calculateMetricsForExchange(data);
       if (metrics.length > 0) {
-        allExchangeMetrics = allExchangeMetrics.concat(metrics);  // Collect per-exchange metrics
-        metricsInserted += metrics.length;  // Update count
+        allExchangeMetrics = allExchangeMetrics.concat(metrics);
       }
     }
 
-    return { success: true, metrics: allExchangeMetrics, metricsInserted, symbol };
+    return { success: true, metrics: allExchangeMetrics, symbol };
   } catch (error) {
     console.error(`❌ Error processing ${symbol}:`, error.message);
     await dbManager.logError(SCRIPT_NAME, 'calculation_error', 'CALC_SYMBOL_FAIL', 
       error.message, { symbol, error: error.stack });
-    return { success: false, metrics: [], metricsInserted: 0, symbol };
+    return { success: false, metrics: [], symbol };
   }
 }
 
 // ============================================================================
-// MAIN CALCULATION FUNCTION
-// Parallel processing with minimal console output
+// MAIN CALCULATION FUNCTION (Batch inserts every N symbols)
 // ============================================================================
 async function calculateAllMetrics() {
   const startTime = Date.now();
@@ -294,43 +257,35 @@ async function calculateAllMetrics() {
     let totalMetricsCalculated = 0;
     let successCount = 0;
     let errorCount = 0;
+    let pendingMetrics = []; // Accumulator for batch
 
-    // Parallel processing with p-limit
-    const limit = pLimit(PARALLEL_SYMBOLS);
-    const tasks = perpList.map(symbol => 
-      limit(async () => {
-        const result = await processSymbol(symbol, startTs, endTs);
-        return result;
-      })
-    );
+    // Process symbols sequentially with batching
+    for (let i = 0; i < perpList.length; i++) {
+      const symbol = perpList[i];
+      const result = await processSymbol(symbol, startTs, endTs);
 
-    const results = await Promise.all(tasks);
-
-    // Collect all metrics globally
-    let allMetrics = [];
-    results.forEach(result => {
       if (result.success) {
         successCount++;
-        totalMetricsCalculated += result.metricsInserted;
-        if (result.metrics && result.metrics.length > 0) {
-          allMetrics = allMetrics.concat(result.metrics);
-        }
+        pendingMetrics = pendingMetrics.concat(result.metrics);
       } else {
         errorCount++;
       }
-    });
 
-    // Sort the collected metrics globally (ts asc, symbol asc, exchange asc)
-    allMetrics.sort((a, b) => {
-      if (a.ts !== b.ts) return Number(a.ts) - Number(b.ts);  // ts ascending (BigInt to Number)
-      if (a.symbol !== b.symbol) return a.symbol.localeCompare(b.symbol);  // symbol ascending
-      return a.exchange.localeCompare(b.exchange);  // exchange ascending
-    });
+      // Insert when batch is full or at end of list
+      const isBatchFull = pendingMetrics.length > 0 && ((i + 1) % SYMBOL_BATCH_SIZE === 0 || i === perpList.length - 1);
+      
+      if (isBatchFull) {
+        // Sort batch before insert
+        pendingMetrics.sort((a, b) => {
+          if (a.ts !== b.ts) return Number(a.ts) - Number(b.ts);
+          if (a.symbol !== b.symbol) return a.symbol.localeCompare(b.symbol);
+          return a.exchange.localeCompare(b.exchange);
+        });
 
-    // Single insert for all sorted metrics
-    if (allMetrics.length > 0) {
-      const globalInsertResult = await dbManager.insertMetrics(allMetrics);
-      totalMetricsCalculated = globalInsertResult.rowCount || allMetrics.length;  // Update total from global insert
+        const globalInsertResult = await dbManager.insertMetrics(pendingMetrics);
+        totalMetricsCalculated += globalInsertResult.rowCount || pendingMetrics.length;
+        pendingMetrics = []; // Clear batch
+      }
     }
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
@@ -355,12 +310,14 @@ async function calculateAllMetrics() {
 }
 
 // ============================================================================
-// CONTINUOUS RUN MODE (Updated - Remove Duplicate Listeners)
+// CONTINUOUS RUN MODE
 // ============================================================================
 async function runContinuously() {
   console.log(`\n🔄 Starting ${SCRIPT_NAME} in continuous mode...`);
   console.log(`📊 Calculation interval: ${CALCULATION_INTERVAL_MS / 1000}s`);
-  console.log(`📅 Database retention: ${DB_RETENTION_DAYS} days\n`);
+  console.log(`📅 Database retention: ${DB_RETENTION_DAYS} days`);
+  console.log(`📦 Symbol batch size: ${SYMBOL_BATCH_SIZE} (insert every ${SYMBOL_BATCH_SIZE} symbols)`);
+  console.log(`⚡ Parallel symbols: ${PARALLEL_SYMBOLS}\n`);
 
   // Run backfill first
   const backfiller = require('./backfill-metrics');
@@ -370,9 +327,9 @@ async function runContinuously() {
     console.log('\n✅ Backfill complete - starting real-time metrics...\n');
   } catch (error) {
     const summary = `Backfill failed: ${error.code} - ${error.message} (line ${error.position || 'unknown'})`;
-    console.error('💥', summary);  // Short summary
+    console.error('💥', summary);
     await dbManager.logError(SCRIPT_NAME, 'backfill_error', 'BACKFILL_FAIL', 
-      summary, { code: error.code, position: error.position });  // Log details
+      summary, { code: error.code, position: error.position });
   }
 
   await logStatus('running', `${SCRIPT_NAME} continuous mode started.`);
@@ -385,13 +342,6 @@ async function runContinuously() {
       console.error('⚠️  Calculation cycle error:', error.message);
     }
   }, CALCULATION_INTERVAL_MS);
-
-  // Graceful cleanup (moved listeners to top-level)
-  const cleanup = (signal) => {
-    clearInterval(runInterval);
-    gracefulShutdown(signal);
-  };
-  // Remove old process.on calls from here - already at top-level
 }
 
 // ============================================================================

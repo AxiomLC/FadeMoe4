@@ -599,7 +599,7 @@ async function startPeriodicFlush() {
 // MAIN EXECUTION
 // ============================================================================
 async function execute() {
-  console.log(`${STATUS_COLOR}🚦 Starting ${SCRIPT_NAME} - WebSocket taker volume streaming (1m real-time)${RESET}`);
+  console.log(`${STATUS_COLOR}🚦 *TV Starting ${SCRIPT_NAME} - WebSocket taker volume stream${RESET}`);
 
   // Load OKX contract values for normalization
   await loadOkxContracts();

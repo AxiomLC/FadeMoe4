@@ -69,7 +69,7 @@ const EXCHANGES = {
 
 const totalSymbols = perpList.length;
 const PERPSPECS = Object.values(EXCHANGES).map(c => c.perpspec).join(', ');
-const STATUS_COLOR = '\x1b[94m'; // Light blue for status logs
+const STATUS_COLOR = '\x1b[36m'; // Light blue for status logs
 const RESET = '\x1b[0m';
 const YELLOW = '\x1b[33m'; // Yellow for warnings
 
@@ -335,15 +335,15 @@ async function batchFetchOI(config) {
 // ============================================================================
 async function backfill() {
   const startTime = Date.now();
-  console.log(`\n🔧 ${STATUS_COLOR}Starting ${SCRIPT_NAME} backfill (USD normalized, unified schema)...${RESET}`);
+  // console.log(`\n${STATUS_COLOR}*OI Starting ${SCRIPT_NAME} backfill (USD normalized, unified schema)...${RESET}`);
 
   // #1 Status: started
-  const message1 = `🔧 Starting ${SCRIPT_NAME} backfill for Open Interest; ${totalSymbols} symbols.`;
+  const message1 = `*OI Starting ${SCRIPT_NAME} backfill for Open Interest; ${totalSymbols} symbols.`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', message1);
   console.log(`${STATUS_COLOR} ${message1}${RESET}`);
 
   // #2 Status: connected (assuming all perpspecs connected; no explicit check)
-  const message2 = `${PERPSPECS} connected, starting fetch.`;
+  const message2 = `*OI ${PERPSPECS} connected, starting fetch.`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', message2);
   console.log(`${STATUS_COLOR} ${message2}${RESET}`);
 
@@ -355,13 +355,13 @@ async function backfill() {
   const heartbeatId = setInterval(() => {
     (async () => {
       // #3 Status: running
-      const message3 = `🔧 ${SCRIPT_NAME} running: backfilling ${totalSymbols} symbols.`;
+      const message3 = `${SCRIPT_NAME} running: backfilling ${totalSymbols} symbols.`;
       try {
         await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message3);
       } catch (err) {
         console.error(`[heartbeat] DB log failed: ${err.message}`);
       }
-      console.log(`${STATUS_COLOR} ${message3}${RESET}`);
+      console.log(`${STATUS_COLOR}*OI ${message3}${RESET}`);
     })();
   }, HEARTBEAT_INTERVAL);
 
@@ -377,7 +377,7 @@ async function backfill() {
   // Single yellow log for missing Bybit OHLCV (if any)
   if (missingBybitSymbols.length > 0) {
     const symbolsList = missingBybitSymbols.join(', ');
-    const warnMsg = `⚠️ Missing byb-ohlcv for symbols: ${symbolsList} (using raw OI, no USD calc)`;
+    const warnMsg = `⚠️ No byb-ohlcv for: ${symbolsList} (using raw OI)`;
     console.log(`${YELLOW}${warnMsg}${RESET}`);
   }
 
@@ -417,18 +417,18 @@ async function backfill() {
 
   // #5 Status: overall completed ONLY if all verified successful
   if (totalSuccess && Object.values(perpspecSuccess).every(s => s)) {
-    const message5 = `⏱️ ${SCRIPT_NAME} backfill completed in ${duration}s!`;
+    const message5 = `⏱️ *OI ${SCRIPT_NAME} backfill completed in ${duration}s!`;
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', message5);
-    console.log(`${STATUS_COLOR}${message5}${RESET}`);
+    console.log(`${message5}`);
   } else {
     const messageWarn = `${SCRIPT_NAME} backfill finished in ${duration}s (incomplete due to errors/missing data).`;
-    console.log(`${STATUS_COLOR}${messageWarn}${RESET}`);
+    console.log(`*OI ${messageWarn}`);
     // Per-perpspec completed only if that one succeeded
     Object.entries(perpspecSuccess).forEach(([perpspec, success]) => {
       if (success) {
         const msg = `${perpspec} backfill complete.`;
         apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', msg);
-        console.log(`${STATUS_COLOR}${msg}${RESET}`);
+        console.log(`${msg}`);
       }
     });
   }

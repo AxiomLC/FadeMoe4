@@ -129,11 +129,20 @@ function displayTableData(data, columns) {
             } else if (typeof val === 'string' && val.length > 50) {
                 td.textContent = val.substring(0, 50) + '...';
                 td.title = val;
+                //======================================
+
+                //=======================================
             } else if (typeof val === 'number' || (!isNaN(val) && val !== '')) {
-                td.textContent = smartTrimDecimal(val);
-            } else {
-                td.textContent = val.toString();
-            }
+    if (['lql', 'lqs'].includes(col)) {
+        // Force 2 decimals for lql/lqs (USD cutoff)
+        td.textContent = Number(val).toFixed(2);
+    } else {
+        // Original logic for other numerics
+        td.textContent = smartTrimDecimal(val);
+    }
+} else {
+    td.textContent = val.toString();
+}
 
             tr.appendChild(td);
         });

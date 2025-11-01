@@ -8,5 +8,8 @@ save/
 .binance-weight.json
 package-lock.json
 jsconfig.json
+bt\brute\
+bt\tune\
+backtester/
 
 

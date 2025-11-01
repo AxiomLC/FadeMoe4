@@ -292,7 +292,7 @@ async function pollAllSymbols() {
 async function execute() {
   // Log #1: Script start
   const totalSymbols = perpList.length;
-  const startMessage = `🚦 Starting ${SCRIPT_NAME} real-time 1m pull; ${totalSymbols} symbols.`;
+  const startMessage = `🚦 *PFR Starting ${SCRIPT_NAME} real-time 1m pull; ${totalSymbols} symbols.`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', startMessage);
   console.log(`${STATUS_COLOR}${startMessage}${RESET}`);
 

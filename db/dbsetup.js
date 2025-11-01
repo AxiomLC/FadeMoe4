@@ -121,9 +121,8 @@ class DatabaseManager {
           rsi60 NUMERIC(10,4),
           tbv NUMERIC(20,8),
           tsv NUMERIC(20,8),
-          lqside VARCHAR(10),
-          lqprice NUMERIC(20,8),
-          lqqty NUMERIC(20,8),
+          lql NUMERIC(20,8),
+          lqs NUMERIC(20,8),
           notes TEXT,
           PRIMARY KEY (ts, symbol, exchange)
         )`
@@ -147,26 +146,26 @@ await this.pool.query(
     v NUMERIC(20,8), oi NUMERIC(20,8), pfr NUMERIC(20,8), lsr NUMERIC(20,8),
     rsi1 NUMERIC(10,4), rsi60 NUMERIC(10,4),
     tbv NUMERIC(20,8), tsv NUMERIC(20,8),
-    lqside VARCHAR(10), lqprice NUMERIC(20,8), lqqty NUMERIC(20,8),
+    lql NUMERIC(20,8), lqs NUMERIC(20,8),
 
     -- % change columns (1m/5m/10m) - NUMERIC(7,3) for range ±9999.999%
     c_chg_1m NUMERIC(7,3), v_chg_1m NUMERIC(7,3), oi_chg_1m NUMERIC(7,3),
     pfr_chg_1m NUMERIC(7,3), lsr_chg_1m NUMERIC(7,3),
     rsi1_chg_1m NUMERIC(7,3), rsi60_chg_1m NUMERIC(7,3),
     tbv_chg_1m NUMERIC(7,3), tsv_chg_1m NUMERIC(7,3),
-    lqside_chg_1m VARCHAR(10), lqprice_chg_1m NUMERIC(7,3), lqqty_chg_1m NUMERIC(7,3),
+    lql_chg_1m NUMERIC(7,3), lqs_chg_1m NUMERIC(7,3),
 
     c_chg_5m NUMERIC(7,3), v_chg_5m NUMERIC(7,3), oi_chg_5m NUMERIC(7,3),
     pfr_chg_5m NUMERIC(7,3), lsr_chg_5m NUMERIC(7,3),
     rsi1_chg_5m NUMERIC(7,3), rsi60_chg_5m NUMERIC(7,3),
     tbv_chg_5m NUMERIC(7,3), tsv_chg_5m NUMERIC(7,3),
-    lqside_chg_5m VARCHAR(10), lqprice_chg_5m NUMERIC(7,3), lqqty_chg_5m NUMERIC(7,3),
+    lql_chg_5m NUMERIC(7,3), lqs_chg_5m NUMERIC(7,3),
     
     c_chg_10m NUMERIC(7,3), v_chg_10m NUMERIC(7,3), oi_chg_10m NUMERIC(7,3),
     pfr_chg_10m NUMERIC(7,3), lsr_chg_10m NUMERIC(7,3), 
     rsi1_chg_10m NUMERIC(7,3), rsi60_chg_10m NUMERIC(7,3),
     tbv_chg_10m NUMERIC(7,3), tsv_chg_10m NUMERIC(7,3),
-    lqside_chg_10m VARCHAR(10), lqprice_chg_10m NUMERIC(7,3), lqqty_chg_10m NUMERIC(7,3),
+    lql_chg_10m NUMERIC(7,3), lqs_chg_10m NUMERIC(7,3),
     PRIMARY KEY (ts, symbol, exchange)
   )`
 );
@@ -245,7 +244,7 @@ await this.pool.query(
       schemas.push({ name: `${p}-pfr`, fields: ['ts', 'symbol', 'exchange', 'pfr'] });
       schemas.push({ name: `${p}-lsr`, fields: ['ts', 'symbol', 'exchange', 'lsr'] });
       schemas.push({ name: `${p}-tv`, fields: ['ts', 'symbol', 'exchange', 'tbv', 'tsv'] });
-      schemas.push({ name: `${p}-lq`, fields: ['ts', 'symbol', 'exchange', 'lqside', 'lqprice', 'lqqty'] });
+      schemas.push({ name: `${p}-lq`, fields: ['ts', 'symbol', 'exchange', 'lql', 'lqs'] });
     }
     schemas.push({ name: 'bin-rsi', fields: ['ts', 'symbol', 'exchange', 'rsi1', 'rsi60'] }); // Unified: no source/interval
 
@@ -327,7 +326,7 @@ async setupRetentionPolicies() {
           oi: null, pfr: null, lsr: null,
           rsi1: null, rsi60: null,
           tbv: null, tsv: null,
-          lqside: null, lqprice: null, lqqty: null,
+          lql: null, lqs: null,
           notes: record.notes || null
         });
       }
@@ -345,7 +344,7 @@ async setupRetentionPolicies() {
       if (record.perpspec?.includes('rsi')) { row.rsi1 = record.rsi1; row.rsi60 = record.rsi60; }
       if (record.perpspec?.includes('tv')) { row.tbv = record.tbv; row.tsv = record.tsv; }
       if (record.perpspec?.includes('lq')) {
-        row.lqside = record.lqside; row.lqprice = record.lqprice; row.lqqty = record.lqqty;
+        row.lql = record.lql; row.lqs = record.lqs;
       }
       if (record.notes) row.notes = record.notes;
       // For continuous: Unique append to perpspec
@@ -357,13 +356,13 @@ async setupRetentionPolicies() {
     const mergedArray = Array.from(merged.values());
     if (mergedArray.length === 0) return [];
 
-    const fields = ['ts', 'symbol', 'exchange', 'perpspec', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lqside', 'lqprice', 'lqqty', 'notes'];
+    const fields = ['ts', 'symbol', 'exchange', 'perpspec', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lql', 'lqs', 'notes'];
 
     return mergedArray.map(row => fields.map(f => {
       let val = row[f] ?? null;
       if (f === 'ts' && typeof val === 'bigint') val = val.toString();
       else if (f === 'perpspec' && Array.isArray(val)) val = JSON.stringify(val);
-      if (['o','h','l','c','v','oi','pfr','lsr','rsi1','rsi60','tbv','tsv','lqprice','lqqty'].includes(f) && typeof val === 'number' && isNaN(val)) val = null;
+      if (['o','h','l','c','v','oi','pfr','lsr','rsi1','rsi60','tbv','tsv','lql','lqs'].includes(f) && typeof val === 'number' && isNaN(val)) val = null;
       return val;
     }));
   }
@@ -390,7 +389,7 @@ async setupRetentionPolicies() {
     const values = await this._mergeRawData(allRawData, true); // Append perpspec
     if (values.length === 0) return { rowCount: 0 };
 
-    const fields = ['ts', 'symbol', 'exchange', 'perpspec', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lqside', 'lqprice', 'lqqty', 'notes'];
+    const fields = ['ts', 'symbol', 'exchange', 'perpspec', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lql', 'lqs', 'notes'];
 
     const updateClause = `
       perpspec = COALESCE(perp_data.perpspec, '[]'::jsonb) || EXCLUDED.perpspec,
@@ -406,9 +405,8 @@ async setupRetentionPolicies() {
       rsi60 = COALESCE(EXCLUDED.rsi60, perp_data.rsi60),
       tbv = COALESCE(EXCLUDED.tbv, perp_data.tbv),
       tsv = COALESCE(EXCLUDED.tsv, perp_data.tsv),
-      lqside = COALESCE(EXCLUDED.lqside, perp_data.lqside),
-      lqprice = COALESCE(EXCLUDED.lqprice, perp_data.lqprice),
-      lqqty = COALESCE(EXCLUDED.lqqty, perp_data.lqqty),
+      lql = COALESCE(EXCLUDED.lql, perp_data.lql),
+      lqs = COALESCE(EXCLUDED.lqs, perp_data.lqs),
       notes = COALESCE(EXCLUDED.notes, perp_data.notes)
     `;
 
@@ -429,7 +427,7 @@ async setupRetentionPolicies() {
     const values = await this._mergeRawData(allRawData, false); // No append for backfill
     if (values.length === 0) return { rowCount: 0 };
 
-    const fields = ['ts', 'symbol', 'exchange', 'perpspec', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lqside', 'lqprice', 'lqqty', 'notes'];
+    const fields = ['ts', 'symbol', 'exchange', 'perpspec', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lql', 'lqs', 'notes'];
 
     // Partial update with COALESCE (additive)
     const updateClause = `
@@ -446,9 +444,8 @@ async setupRetentionPolicies() {
       rsi60 = COALESCE(EXCLUDED.rsi60, perp_data.rsi60),
       tbv = COALESCE(EXCLUDED.tbv, perp_data.tbv),
       tsv = COALESCE(EXCLUDED.tsv, perp_data.tsv),
-      lqside = COALESCE(EXCLUDED.lqside, perp_data.lqside),
-      lqprice = COALESCE(EXCLUDED.lqprice, perp_data.lqprice),
-      lqqty = COALESCE(EXCLUDED.lqqty, perp_data.lqqty),
+      lql = COALESCE(EXCLUDED.lql, perp_data.lql),
+      lqs = COALESCE(EXCLUDED.lqs, perp_data.lqs),
       notes = COALESCE(EXCLUDED.notes, perp_data.notes)
     `;
 
@@ -507,7 +504,7 @@ async setupRetentionPolicies() {
     }
 
     const query = `
-      SELECT ts, symbol, exchange, perpspec, o, h, l, c, v, oi, pfr, lsr, rsi1, rsi60, tbv, tsv, lqside, lqprice, lqqty, notes
+      SELECT ts, symbol, exchange, perpspec, o, h, l, c, v, oi, pfr, lsr, rsi1, rsi60, tbv, tsv, lql, lqs, notes
       FROM perp_data
       WHERE exchange = $1 AND symbol = $2 AND ts >= $3 AND ts < $4
       ORDER BY ts ASC
@@ -530,9 +527,8 @@ async setupRetentionPolicies() {
         rsi60: row.rsi60 ? Number(row.rsi60) : null,
         tbv: row.tbv ? Number(row.tbv) : null,
         tsv: row.tsv ? Number(row.tsv) : null,
-        lqside: row.lqside ? String(row.lqside) : null,
-        lqprice: row.lqprice ? Number(row.lqprice) : null,
-        lqqty: row.lqqty ? Number(row.lqqty) : null,
+        lql: row.lql ? Number(row.lql) : null,
+        lqs: row.lqs ? Number(row.lqs) : null,
         notes: row.notes || null,
         perpspec: row.perpspec || null
       }));

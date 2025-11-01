@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Test Horizontal Scroll</title>
+<style>
+  body {
+    background: #1a1a2e;
+    color: #d1d5db;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    padding: 20px;
+  }
+  .table-container {
+    background: #1e1e2f;
+    border-radius: 8px;
+    padding: 10px;
+    overflow-x: auto;
+    max-width: 600px;
+    border: 2px solid red;
+  }
+  table {
+    border-collapse: collapse;
+    width: max-content;
+    min-width: 100%;
+  }
+  th, td {
+    border: 1px solid #3a3a50;
+    padding: 10px 12px;
+    white-space: nowrap;
+  }
+  thead th {
+    background: #2a2a40;
+    color: #b569ff;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+  <h1>Test Horizontal Scroll</h1>
+  <div class="table-container">
+    <table>
+      <thead>
+        <tr>
+          <th>Header 1</th>
+          <th>Header 2</th>
+          <th>Header 3</th>
+          <th>Header 4</th>
+          <th>Header 5</th>
+          <th>Header 6</th>
+          <th>Header 7</th>
+          <th>Header 8</th>
+          <th>Header 9</th>
+          <th>Header 10</th>
+          <th>Header 11</th>
+          <th>Header 12</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Row 1 Col 1</td>
+          <td>Row 1 Col 2</td>
+          <td>Row 1 Col 3</td>
+          <td>Row 1 Col 4</td>
+          <td>Row 1 Col 5</td>
+          <td>Row 1 Col 6</td>
+          <td>Row 1 Col 7</td>
+          <td>Row 1 Col 8</td>
+          <td>Row 1 Col 9</td>
+          <td>Row 1 Col 10</td>
+          <td>Row 1 Col 11</td>
+          <td>Row 1 Col 12</td>
+        </tr>
+        <tr>
+          <td>Row 2 Col 1</td>
+          <td>Row 2 Col 2</td>
+          <td>Row 2 Col 3</td>
+          <td>Row 2 Col 4</td>
+          <td>Row 2 Col 5</td>
+          <td>Row 2 Col 6</td>
+          <td>Row 2 Col 7</td>
+          <td>Row 2 Col 8</td>
+          <td>Row 2 Col 9</td>
+          <td>Row 2 Col 10</td>
+          <td>Row 2 Col 11</td>
+          <td>Row 2 Col 12</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>

@@ -11,7 +11,7 @@ const perpList = require('../perp-list');
 const pLimit = require('p-limit');
 
 const SCRIPT_NAME = '1-okx-pfr-h.js';
-const STATUS_COLOR = '\x1b[96m'; // Light blue for all console logs
+const STATUS_COLOR = '\x1b[36m'; // Light blue for all console logs
 const RESET = '\x1b[0m';
 
 // ============================================================================
@@ -20,8 +20,8 @@ const RESET = '\x1b[0m';
 const DAYS = 10;
 
 // DIRECT CONNECTION SETTINGS
-const DIRECT_CONCURRENCY = 12;
-const DIRECT_PAGE_DELAY_MS = 200;
+const DIRECT_CONCURRENCY = 8;
+const DIRECT_PAGE_DELAY_MS = 80;
 const DIRECT_TIMEOUT_MS = 7000;
 
 // PROXY CONNECTION SETTINGS
@@ -30,11 +30,11 @@ const PROXY_PAGE_DELAY_MS = 100;
 const PROXY_TIMEOUT_MS = 9000;
 
 // SHARED SETTINGS
-const RETRY_429_MAX = 2;
-const RETRY_429_BASE_MS = 600;
+const RETRY_429_MAX = 3;
+const RETRY_429_BASE_MS = 700;
 const HEARTBEAT_STATUS_INTERVAL = 35000;
 const HEARTBEAT_429_INTERVAL = 30000;
-const DIRECT_PROXY_SPLIT = 50;
+const DIRECT_PROXY_SPLIT = 100;
 const DB_INSERT_MILESTONE = 50000;
 const CHUNK_SIZE = 10000; // Insert in 10k chunks
 
@@ -51,7 +51,7 @@ const PROXY_CONFIG = {
 const proxyUrl = `http://${PROXY_CONFIG.username}:${PROXY_CONFIG.password}@${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`;
 const proxyAgent = new HttpsProxyAgent(proxyUrl);
 
-console.log(`${STATUS_COLOR}🔧 okx-pfr Proxy configured: ${PROXY_CONFIG.host}:${PROXY_CONFIG.port}${RESET}`);
+// console.log(`${STATUS_COLOR}okx-pfr Proxy configured: ${PROXY_CONFIG.host}:${PROXY_CONFIG.port}${RESET}`);
 
 // ============================================================================
 // DERIVED SETTINGS
@@ -64,7 +64,7 @@ const splitIndex = Math.ceil(perpList.length * (DIRECT_PROXY_SPLIT / 100));
 const directSymbols = perpList.slice(0, splitIndex);
 const proxySymbols = perpList.slice(splitIndex);
 
-console.log(`${STATUS_COLOR}okx-pfr Symbol split: ${directSymbols.length} direct, ${proxySymbols.length} proxy${RESET}`);
+console.log(`${STATUS_COLOR}*okxPFR Symbol split: ${directSymbols.length} direct, ${proxySymbols.length} proxy${RESET}`);
 
 // ============================================================================
 // EXCHANGE CONFIGURATION
@@ -179,7 +179,7 @@ async function insertInChunks(allData) {
     // Log at milestones
     if (Math.floor(stats.recordsInserted / DB_INSERT_MILESTONE) > Math.floor(lastInsertLog / DB_INSERT_MILESTONE)) {
       const msg = `${OKX_CONFIG.perpspec} inserted ${stats.recordsInserted} records`;
-      console.log(`${STATUS_COLOR}🔩 ${msg}${RESET}`);
+      console.log(`${STATUS_COLOR}${msg}${RESET}`);
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg);
       lastInsertLog = stats.recordsInserted;
     }
@@ -325,7 +325,7 @@ async function fetchOKXPremium(baseSymbol, useProxy = false) {
 async function backfill() {
   const startTime = Date.now();
   
-  console.log(`${STATUS_COLOR}🔧 Starting ${SCRIPT_NAME} - Premium Funding Rate backfill${RESET}`);
+  console.log(`${STATUS_COLOR}*okxPFR Starting ${SCRIPT_NAME} - Premium Funding Rate backfill${RESET}`);
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} started`);
 
   heartbeatStop = false;
@@ -369,8 +369,8 @@ async function backfill() {
 
   await Promise.allSettled(tasks);
 
-  const msg = `${OKX_CONFIG.perpspec} backfilling complete ${stats.symbolsCompleted} symbols. Final Loop started.`;
-  console.log(`${STATUS_COLOR}🔧 ${msg}${RESET}`);
+  const msg = `${OKX_CONFIG.perpspec} backfill complete ${stats.symbolsCompleted} symbols. Final Loop started.`;
+  console.log(`${STATUS_COLOR}*${msg}${RESET}`);
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg);
 
   // FINAL LOOP - Fetch recent 5 records per symbol
@@ -441,7 +441,7 @@ async function backfill() {
   await sleep(1000);
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-  const finalMessage = `⏱️ ${SCRIPT_NAME} completed in ${duration}s`;
+  const finalMessage = `⏱️ *PFR-okx ${SCRIPT_NAME} completed in ${duration}s`;
   console.log(`${finalMessage}`);
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', finalMessage);
 }

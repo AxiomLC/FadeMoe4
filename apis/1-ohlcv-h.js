@@ -424,7 +424,7 @@ async function backfill() {
     await createMTTokenWrapper(true);
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    await logStatus('completed', `🕒 OHLCV backfill completed in ${duration}s`);
+    await logStatus('completed', `🕒 *OHLCV backfill completed in ${duration}s`);
   } catch (error) {
     console.error('\x1b[31m❌ Backfill error:', error.message, '\x1b[0m');
     throw error;

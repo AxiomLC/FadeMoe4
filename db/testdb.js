@@ -1,5 +1,5 @@
 // ============================================================================
-// METRICS BACKFILL - High-speed full _chg_ param calculation and insert
+// TESTDB METRICS BACKFILL - High-speed full _chg_ param calculation and insert
 // Independent from calc-metrics.js, optimized for max throughput
 // Simplified: always uses ON CONFLICT DO UPDATE with conditional update on detect column
 // ============================================================================
@@ -11,7 +11,7 @@ const format = require('pg-format');
 const apiUtils = require('../api-utils');
 const SCRIPT_NAME = 'backfill-metrics.js';
 
-const STATUS_LOG_COLOR = '\x1b[35m'; // Bright cyan
+const STATUS_LOG_COLOR = '\x1b[38;2;147;112;219m'; // Purple
 const COLOR_RESET = '\x1b[0m';
 
 // ============================================================================
@@ -41,7 +41,7 @@ function sleep(ms) {
 
 async function logStatus(status, message) {
   try {
-    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, status, message);
+    await dbManager.logStatus(SCRIPT_NAME, status, message);
   } catch {
     // Ignore logging errors to avoid slowing down main process
   }
@@ -308,21 +308,21 @@ async function backfillSymbol(symbol, retentionStart, endTs) {
 // MAIN BACKFILL LOOP
 // ============================================================================
 
-async function runBackfill() {
+async function runTestBackfill() {
   const startTime = Date.now();
   const now = Date.now();
   const retentionStart = now - DB_RETENTION_DAYS * 24 * 60 * 60 * 1000;
   const endTs = now;
 
   console.log(`\n${'='.repeat(80)}`);
-  console.log(`\uD83D\uDE80 Starting perp_metrics backfill with high concurrency and chunk size`);
+  console.log(`🚀 Starting perp_metrics backfill with high concurrency and chunk size`);
   console.log(`   Insert chunk size: ${INSERT_CHUNK_SIZE}`);
   console.log(`   Parallel symbols: ${PARALLEL_SYMBOLS}`);
   console.log(`   Inter-chunk delay: ${INTER_CHUNK_DELAY_MS}ms`);
   console.log(`   Detect column for conditional update: ${DETECT_COLUMN}`);
   console.log(`${'='.repeat(80)}\n`);
 
-  await logStatus('started', `${SCRIPT_NAME} started - backfilling perp_metrics.`);
+  await logStatus('started', `${SCRIPT_NAME} started - high-speed backfill.`);
 
   let totalInserted = 0;
   let totalSkipped = 0;
@@ -354,7 +354,7 @@ async function runBackfill() {
 
     await logStatus(status, `Backfill ${status}: ${totalInserted} rows inserted, ${errorCount} errors in ${duration}s`);
     console.log(`\n${'='.repeat(80)}`);
-    console.log(`\u2705 Backfill ${status.toUpperCase()}`);
+    console.log(`✅ Backfill ${status.toUpperCase()}`);
     console.log(`   Symbols processed: ${processedCount}/${totalTasks}`);
     console.log(`   Rows inserted: ${totalInserted}`);
     console.log(`   Errors: ${errorCount}`);
@@ -363,10 +363,10 @@ async function runBackfill() {
 
   } catch (err) {
     clearInterval(heartbeat);
-    console.error(`\n\uD83D\uDCA5 Backfill failed: ${err.message}`);
+    console.error(`\n💥 Backfill failed: ${err.message}`);
     await logStatus('error', `Backfill failed: ${err.message}`);
   } finally {
-    // await dbManager.close();  COMMENT OUT, Dont close pool- calc-metrics needs it.
+    await dbManager.close();
   }
 }
 
@@ -375,7 +375,7 @@ async function runBackfill() {
 // ============================================================================
 
 async function gracefulShutdown(signal) {
-  console.log(`\n\u26A0\uFE0F Received ${signal}, shutting down gracefully...`);
+  console.log(`\n⚠️ Received ${signal}, shutting down gracefully...`);
   await logStatus('stopped', `${SCRIPT_NAME} stopped by ${signal}.`);
   await dbManager.close();
   process.exit(0);
@@ -389,15 +389,15 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 // ============================================================================
 
 if (require.main === module) {
-  runBackfill()
+  runTestBackfill()
     .then(() => {
-      console.log('\u2705 backfill-metrics completed successfully');
+      console.log('✅ testdb.js backfill completed successfully');
       process.exit(0);
     })
     .catch(err => {
-      console.error('\uD83D\uDCA5 backfill-metrics failed:', err);
+      console.error('💥 testdb.js backfill failed:', err);
       process.exit(1);
     });
 }
 
-module.exports = { runBackfill };
+module.exports = { runTestBackfill };

@@ -19,7 +19,7 @@ const weightMonitor = require('../b-weight');
 // ============================================================================
 // USER SPEED SETTINGS
 // ============================================================================
-const STATUS_COLOR = '\x1b[94m'; // Light blue for status logs
+const STATUS_COLOR = '\x1b[36m'; // Light blue for status logs
 const RESET = '\x1b[0m';
 const DAYS = 10;                      // Days to backfill
 const SLICE_HOURS = 12;               // Time slice size (12h)
@@ -200,15 +200,15 @@ async function backfill() {
   const totalSymbols = perpList.length;
 
   // Log #1: Script start
-  const startMessage = `🔧 Starting ${SCRIPT_NAME} backfill for Premium Funding Rates; ${totalSymbols} symbols.`;
+  const startMessage = `*bbPFR Starting ${SCRIPT_NAME} backfill for Premium Funding Rates; ${totalSymbols} symbols.`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', startMessage);
   console.log(`${STATUS_COLOR}${startMessage}${RESET}`);
 
   // Log #2: Perpspecs connected
   const perpspecs = Object.values(EXCHANGES).map(cfg => cfg.perpspec).join(', ');
-  const connectMessage = `${perpspecs} connected, starting fetch.`;
+  const connectMessage = `*${perpspecs} connected, starting fetch.`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', connectMessage);
-  console.log(`${STATUS_COLOR}🔧 ${connectMessage}${RESET}`);
+  console.log(`${STATUS_COLOR}${connectMessage}${RESET}`);
 
   const startTime = Date.now();
 
@@ -222,7 +222,7 @@ async function backfill() {
           ? `${cfg.perpspec} 429 errors on ${errSet.size} symbols.` 
           : `${cfg.perpspec} backfilling db.`;
         await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', runningMessage, { perpspec: cfg.perpspec });
-        console.log(`🔧${STATUS_COLOR} ${runningMessage}${RESET}`);
+        console.log(`${STATUS_COLOR} ${runningMessage}${RESET}`);
       }
     }
   }, HEARTBEAT_INTERVAL);
@@ -255,7 +255,7 @@ async function backfill() {
             completedPerpspecs.add(cfg.perpspec);
             const completeMessage = `${cfg.perpspec} backfill complete.`;
             await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', completeMessage, { perpspec: cfg.perpspec });
-            console.log(`${STATUS_COLOR}🔧 ${completeMessage}${RESET}`);
+            console.log(`${STATUS_COLOR}*bbPFR ${completeMessage}${RESET}`);
           }
         } catch (err) {
           // Track 429 errors for heartbeat
@@ -276,7 +276,7 @@ async function backfill() {
   // Log #5: Full script completion
   if (completedPerpspecs.size === Object.keys(EXCHANGES).length) {
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-    const finalMessage = `⏱️ ${SCRIPT_NAME} backfill completed in ${duration}s!`;
+    const finalMessage = `⏱️ *bbPFR ${SCRIPT_NAME} backfill completed in ${duration}s!`;
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', finalMessage);
     console.log(`${finalMessage}`);
   }

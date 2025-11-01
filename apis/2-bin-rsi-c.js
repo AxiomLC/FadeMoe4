@@ -232,17 +232,17 @@ async function pollAllSymbols() {
 
 // Main execution (like all-pfr-c.js)
 async function execute() {
-  console.log(`${STATUS_COLOR}🚦 Starting ${SCRIPT_NAME} - Continuous RSI polling${RESET}`);
+  console.log(`${STATUS_COLOR}🚦*RSI Starting ${SCRIPT_NAME} - Continuous RSI polling${RESET}`);
   // Status: started
   const startMsg = `${SCRIPT_NAME} connected`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', startMsg);
-  console.log(`${STATUS_COLOR}🚦 ${startMsg}${RESET}`);
+  // console.log(`${STATUS_COLOR}🚦 ${startMsg}${RESET}`);
 
   // Initial poll (loads 1 day for full cache)
   await pollAllSymbols();
 
   // Status: running after initial
-  const initialMsg = `${SCRIPT_NAME} initial Calc complete`;
+  const initialMsg = `🚦 ${SCRIPT_NAME} initial Calc complete`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', initialMsg);
   console.log(`${STATUS_COLOR}${initialMsg}${RESET}`);
 
@@ -251,7 +251,7 @@ async function execute() {
     try {
       await pollAllSymbols();
       // Status: running after each cycle
-      const cycleMsg = `${SCRIPT_NAME}🚥 1m rsi Calc done`;
+      const cycleMsg = `🚥 1m rsi Calc done`;
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', cycleMsg);
       console.log(`${STATUS_COLOR}${cycleMsg}${RESET}`);
     } catch (error) {

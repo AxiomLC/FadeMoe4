@@ -23,7 +23,7 @@ const HEARTBEAT_INTERVAL = 10000; // 10s heartbeat
 const CHUNK_SIZE = 5; // Parallel chunks to avoid DB overload
 const MAX_NULL_PCT = 15; // Allow <=15% null for rsi60 (covers early ~11hrs + gaps)
 
-const STATUS_COLOR = '\x1b[94m'; // Light blue for status logs
+const STATUS_COLOR = '\x1b[36m'; // Light blue for status logs
 const RESET = '\x1b[0m';
 const RECENT_THRESHOLD_MIN = 5;  // Error if last OHLCV >N min old
 const missingRecentSymbols = new Set();  // Track unique symbols with no recent OHLCV
@@ -182,7 +182,7 @@ async function verifyAllRSIComplete(symbols) {
     const totalRsiRows = parseInt(rsiResult.rows[0].total_rsi_rows || 0);
 
     // Debug log counts (remove after fixing)
-    console.log(`${STATUS_COLOR}verif: Total OHLCV rows: ${totalOhlcv}, RSI rows: ${totalRsiRows}, RSI1 non-null: ${rsi1Count}, RSI60 non-null: ${rsi60Count}${RESET}`);
+    // console.log(`${STATUS_COLOR}verif: Total OHLCV rows: ${totalOhlcv}, RSI rows: ${totalRsiRows}, RSI1 non-null: ${rsi1Count}, RSI60 non-null: ${rsi60Count}${RESET}`);
 
     if (totalOhlcv === 0) {
       console.warn(`No OHLCV data for symbols - skipping RSI check`);
@@ -199,7 +199,7 @@ async function verifyAllRSIComplete(symbols) {
       return false;
     }
     if (nullRsi60Pct > MAX_NULL_PCT) {
-      console.error(`[VERIFICATION] RSI60_NULL_WARNING: ${nullRsi60Pct.toFixed(1)}% rsi60 null in ${totalRsiRows} RSI rows - check early data/aggregation`);
+      console.error(`verif RSI60_NULL_WARNING: ${nullRsi60Pct.toFixed(1)}% rsi60 null in ${totalRsiRows} RSI rows - check early data/aggregation`);
       return false;
     }
 
@@ -224,7 +224,7 @@ async function verifyAllRSIComplete(symbols) {
     }
 
     // Log recent status (always, for visibility)
-    console.log(`${STATUS_COLOR}verif: Recent OHLCV check: ${missingRecentCount} symbols with no updates in last ${RECENT_THRESHOLD_MIN} min${RESET}`);
+    // console.log(`${STATUS_COLOR}verif: Recent OHLCV check: ${missingRecentCount} symbols with no updates in last ${RECENT_THRESHOLD_MIN} min${RESET}`);
 
     // If missing recent OHLCV, treat as error (RSI calc can't proceed without it)
     if (missingRecentCount > 0) {
@@ -242,7 +242,7 @@ async function verifyAllRSIComplete(symbols) {
       return false;  // Fail verification on missing recent data
     }
 
-    console.log(`${STATUS_COLOR}verif: RSI complete: ${rsi1Pct.toFixed(1)}% RSI1, ${100 - nullRsi60Pct.toFixed(1)}% RSI60${RESET}`);
+    console.log(`${STATUS_COLOR}*RSI complete: ${rsi1Pct.toFixed(1)}% RSI1, ${100 - nullRsi60Pct.toFixed(1)}% RSI60${RESET}`);
     return true;
   } catch (error) {
     console.error(`[DATABASE] VERIFY_ERROR: Verification failed - ${error.message}`);
@@ -253,7 +253,7 @@ async function verifyAllRSIComplete(symbols) {
 //==================================================================
 async function calculateRSIForAllSymbols() {
   const startTime = Date.now();
-  console.log(`\n🔧 ${STATUS_COLOR}Starting ${SCRIPT_NAME}...${RESET}`);
+  console.log(`\n${STATUS_COLOR}*RSI Starting ${SCRIPT_NAME}...${RESET}`);
   let heartbeatInterval;
 
   try {
@@ -262,21 +262,21 @@ async function calculateRSIForAllSymbols() {
     const totalSymbols = symbols.length;
 
     // #1 Status: started
-    const message1 = `🔧 ${SCRIPT_NAME} initiated, rsi1, rsi60 cals for ${totalSymbols} symbols.`;
+    const message1 = `*RSI ${SCRIPT_NAME} initiated, ${totalSymbols} symbols.`;
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', message1);
     console.log(`${STATUS_COLOR}${message1}${RESET}`);
 
     if (totalSymbols === 0) {
       const message3 = `rsi1, rsi60 calculation for 0 symbols.`;
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message3);
-      console.log(`${STATUS_COLOR}${message3}${RESET}`);
+      // console.log(`*RSI ${STATUS_COLOR}${message3}${RESET}`);
       return;
     }
 
     // #2 Status: connected (DB query successful)
     const message2 = `DB connected for exchange '${DATA_EXCHANGE}', start RSI cals for ${totalSymbols} symbols.`;
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', message2);
-    console.log(`${STATUS_COLOR}🔧 ${message2}${RESET}`);
+    // console.log(`${STATUS_COLOR}🔧 *RSI ${message2}${RESET}`);
 
     // Initialize tracking
     let symbolsProcessed = 0;
@@ -292,7 +292,7 @@ async function calculateRSIForAllSymbols() {
           } catch (err) {
             console.error(`[heartbeat] DB log failed: ${err.message}`);
           }
-          console.log(`${STATUS_COLOR}[RUNNING] ${message}${RESET}`);
+          console.log(`${STATUS_COLOR}*RSI ${message}${RESET}`);
         }
       })();
     }, HEARTBEAT_INTERVAL);
@@ -328,10 +328,10 @@ async function calculateRSIForAllSymbols() {
     const allComplete = await verifyAllRSIComplete(symbols);
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     if (allComplete) {
-      const message5 = `⏱️ RSI backfills complete in ${duration}s for ${symbolsProcessed}/${totalSymbols} symbols.`;
+      const message5 = `⏱️ *RSI backfills complete in ${duration}s for ${symbolsProcessed}/${totalSymbols} symbols.`;
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', message5);
-      console.log(`${STATUS_COLOR} ${message5}${RESET}`);
-      console.log(`\n⏱️ RSI backfills complete in ${duration}s!`);
+      console.log(`${message5}`);
+      // console.log(`\n⏱️ *RSI backfills complete in ${duration}s!`);
     } else {
       const messageWarn = `RSI backfills incomplete in ${duration}s (check verification logs)`;
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'warning', messageWarn);

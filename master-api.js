@@ -37,7 +37,7 @@ class MasterAPI {
   async initialize() {
     console.log(`${STATUS_COLOR}#### 🚀 MASTER API INITIALIZING ####${RESET}`);
     await this.discoverScripts();
-    console.log(`${STATUS_COLOR}#### ✅ FOUND ${this.scripts.length} SCRIPTS IN apis/ ####${RESET}`);
+    console.log(`${STATUS_COLOR}#### 🚦 FOUND ${this.scripts.length} SCRIPTS IN apis/ ####${RESET}`);
 
     await apiUtils.logScriptStatus(
       dbManager,
@@ -89,7 +89,7 @@ class MasterAPI {
       return;
     }
 
-    console.log(`${STATUS_COLOR}#### 🔄 STARTING BLOCK 1: ${block1Scripts.map(s => s.name).join(', ')} ####${RESET}`);
+    console.log(`${STATUS_COLOR}#### 🚦 STARTING BLOCK 1: ${block1Scripts.map(s => s.name).join(', ')} ####${RESET}`);
 
     await apiUtils.logScriptStatus(dbManager, 'master-api', 'running', 'Block 1 scripts started');
 

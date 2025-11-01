@@ -45,7 +45,7 @@ app.get('/api/params', async (req, res) => {
         const params = [
             'ts', 'symbol', 'exchange',
             'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 
-            'rsi1', 'rsi60', 'tbv', 'tsv', 'lqside', 'lqprice', 'lqqty'
+            'rsi1', 'rsi60', 'tbv', 'tsv', 'lql', 'lqs'
         ];
         res.json(params);
     } catch (error) {
@@ -93,10 +93,10 @@ if (exchange && exchange !== '' && exchange !== 'all') {
 
 
         // Valid parameters
-        const validParams = ['ts', 'symbol', 'exchange', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lqside', 'lqprice', 'lqqty'];
+        const validParams = ['ts', 'symbol', 'exchange', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lql', 'lqs'];
 
         // Build SELECT clause
-        let selectFields = 'ts, symbol, exchange, o, h, l, c, v, oi, pfr, lsr, rsi1, rsi60, tbv, tsv, lqside, lqprice, lqqty';
+        let selectFields = 'ts, symbol, exchange, o, h, l, c, v, oi, pfr, lsr, rsi1, rsi60, tbv, tsv, lql, lqs';
         let visibleColumns = validParams;
         
         if (params && params !== '' && params !== 'all') {

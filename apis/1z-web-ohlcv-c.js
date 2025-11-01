@@ -132,7 +132,7 @@ async function insertMT(mtRecord) {
     if (!mtRecord) return;
     // Use insertData for continuous MT (partial update; appends to perpspec array)
     await dbManager.insertData([mtRecord]);
-    console.log(`${STATUS_COLOR}MT Market Trend token 1m${RESET}`);
+    // console.log(`${STATUS_COLOR}MT Market Trend token 1m${RESET}`);
   } catch (error) {
     await apiUtils.logScriptError(dbManager, SCRIPT_NAME, 'INTERNAL', 'MT_INSERT_FAILED', error.message);
     console.error(`${ERROR_COLOR}❌ MT insert failed: ${error.message}${RESET}`);
@@ -200,7 +200,7 @@ async function processAndInsert(exchange, baseSymbol, rawData) {
 
     const expectedCount = exchange === 'BYBIT' ? bybitActiveSymbols.size : perpList.length;
     if (completedSymbols[perpspec].size === expectedCount) {
-      const msg = `${perpspec} 1min ohlcv for ${expectedCount} symbols`;
+      const msg = `${perpspec} 1min ${expectedCount} symbols`;
       console.log(`${STATUS_COLOR}🚥 ${msg}${RESET}`);
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', msg);
 
@@ -301,7 +301,7 @@ async function okxWebSocket() {
  * MAIN EXECUTION
  * ========================================== */
 async function execute() {
-  console.log(`${STATUS_COLOR}🚦 Starting ${SCRIPT_NAME} - WebSocket OHLCV streaming${RESET}`);
+  console.log(`${STATUS_COLOR}🚦 *OHLCV Starting ${SCRIPT_NAME} - WebSocket OHLCV streaming${RESET}`);
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);
 
   binanceWebSocket();

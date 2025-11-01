@@ -18,7 +18,7 @@ if (!window.appState) {
         visibleColumns: [],
         totalPages: 1,
         totalRecords: 0,
-        defaultColumns: ['ts', 'symbol', 'exchange', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lqside', 'lqprice', 'lqqty'],
+        defaultColumns: ['ts', 'symbol', 'exchange', 'o', 'h', 'l', 'c', 'v', 'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'tbv', 'tsv', 'lql', 'lqs'],
         mandatoryColumns: ['ts', 'symbol', 'exchange']
     };
 }

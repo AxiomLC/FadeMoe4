@@ -1,13 +1,12 @@
 /* ==========================================
- * web-lq-c.js   22 Oct 2025 - Unified Schema
+ * web-lq-c.js   30 Oct 2025 - Unified Schema (Refactored)
  * Continuous WebSocket Liquidation Collector with 1-minute Bucketing
  *
  * Streams liquidation data from Binance, Bybit, and OKX
  * Aggregates liquidation events into 1-minute buckets per symbol
- * Inserts aggregated liquidation data into the database
- * Tracks liquidation side (majority), average price, and total quantity per minute
+ * Calculates USD value of long and short liquidations per minute
+ * Inserts aggregated liquidation data (lql, lqs) into the database
  * Unified: insertData (partial DO UPDATE); no source/interval; explicit exchange
- * Tie-breaker: Queries unified perp_data by exchange/symbol/ts (no perpspec filter)
  * ========================================== */
 
 const WebSocket = require('ws');
@@ -17,7 +16,7 @@ const perpList = require('../perp-list');
 require('dotenv').config();
 
 const SCRIPT_NAME = 'web-lq-c.js';
-const STATUS_COLOR = '\x1b[96m'; // Bright cyan (blue-green)
+const STATUS_COLOR = '\x1b[92m'; // Bright cyan (blue-green)
 const RESET = '\x1b[0m';
 
 const EXCHANGE_CONFIG = {
@@ -83,61 +82,19 @@ function updateBucket(perpspec, symbol, ts, side, price, qty) {
       symbol,
       exchange: EXCHANGE_CONFIG[Object.keys(EXCHANGE_CONFIG).find(key => EXCHANGE_CONFIG[key].PERPSPEC === perpspec)].EXCHANGE,
       perpspec,
-      lqsideCounts: { long: 0, short: 0 },
-      lqpriceSum: 0,
-      lqpriceCount: 0,
-      lqqtySum: 0
+      lqlSum: 0,  // USD value of long liquidations
+      lqsSum: 0   // USD value of short liquidations
     });
   }
 
   const bucket = symbolBuckets.get(bucketTs);
 
-  // Count sides
+  // Calculate USD value and add to appropriate accumulator
+  const usdValue = price * qty;
   if (side === 'long') {
-    bucket.lqsideCounts.long += 1;
+    bucket.lqlSum += usdValue;
   } else if (side === 'short') {
-    bucket.lqsideCounts.short += 1;
-  }
-
-  // Sum price and qty
-  bucket.lqpriceSum += price;
-  bucket.lqpriceCount += 1;
-  bucket.lqqtySum += qty;
-}
-
-// Helper: Determine majority side with tie-breaker
-async function determineLqside(bucket) {
-  const { long, short } = bucket.lqsideCounts;
-  if (long > short) return 'long';
-  if (short > long) return 'short';
-
-  // Tie-breaker: compare avg price to OHLCV high/low for symbol and bucketTs
-  const avgPrice = bucket.lqpriceSum / bucket.lqpriceCount;
-
-  // Query OHLCV for symbol and bucketTs (unified: by exchange/symbol/ts, no perpspec filter)
-  const config = EXCHANGE_CONFIG[Object.keys(EXCHANGE_CONFIG).find(key => EXCHANGE_CONFIG[key].PERPSPEC === bucket.perpspec)];
-  const query = `
-    SELECT h, l FROM perp_data
-    WHERE symbol = $1 AND exchange = $2 AND ts = $3
-      AND (o IS NOT NULL OR h IS NOT NULL OR l IS NOT NULL OR c IS NOT NULL OR v IS NOT NULL)
-    LIMIT 1
-  `;
-  try {
-    const result = await dbManager.query(query, [bucket.symbol, config.EXCHANGE, BigInt(bucket.ts)]);
-    if (result.rows.length === 0) {
-      // No OHLCV data, default to 'long'
-      return 'long';
-    }
-    const { h, l } = result.rows[0];
-    if (h === null || l === null) return 'long';
-
-    // Determine which is closer
-    const distToLow = Math.abs(avgPrice - parseFloat(l));
-    const distToHigh = Math.abs(avgPrice - parseFloat(h));
-    return distToLow <= distToHigh ? 'long' : 'short';
-  } catch (error) {
-    console.error(`Error fetching OHLCV for tie-breaker: ${error.message}`);
-    return 'long'; // default fallback
+    bucket.lqsSum += usdValue;
   }
 }
 
@@ -151,20 +108,14 @@ async function flushBuckets() {
     for (const [symbol, bucketMap] of symbolBucketsMap.entries()) {
       for (const [bucketTs, bucket] of bucketMap.entries()) {
         if (bucketTs < threshold) {
-          // Determine lqside with tie-breaker if needed
-          bucket.lqside = await determineLqside(bucket);
-          bucket.lqprice = bucket.lqpriceSum / bucket.lqpriceCount;
-          bucket.lqqty = bucket.lqqtySum;
-
           // Prepare record for DB insert - ts as BigInt, unified format
           const record = {
             ts: apiUtils.toMillis(BigInt(bucket.ts)),
             symbol: bucket.symbol,
             exchange: bucket.exchange,
             perpspec: bucket.perpspec, // String; insertData wraps to array
-            lqside: bucket.lqside,
-            lqprice: bucket.lqprice,
-            lqqty: bucket.lqqty
+            lql: bucket.lqlSum,
+            lqs: bucket.lqsSum
           };
 
           try {
@@ -207,7 +158,7 @@ function toNumberTimestamp(value) {
 
 /* ==========================================
  * Process and insert liquidation record from raw event
- * Instead of inserting raw event, update bucket
+ * Updates bucket with USD value of liquidation
  * ========================================== */
 async function processAndInsert(exchange, baseSymbol, rawData) {
   const config = EXCHANGE_CONFIG[exchange];
@@ -247,7 +198,7 @@ async function processAndInsert(exchange, baseSymbol, rawData) {
     // Periodic status logging
     const now = Date.now();
     if (!lastStatusLog[perpspec] || now - lastStatusLog[perpspec] >= STATUS_LOG_INTERVAL) {
-      const message = `👾 ${perpspec} posted ${liquidationCounts[perpspec] || 0} liquidation buckets`;
+      const message = `🚥 ${perpspec} posted ${liquidationCounts[perpspec] || 0} liquidation buckets`;
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message, { perpspec });
       console.log(`${STATUS_COLOR}${message}${RESET}`);
       lastStatusLog[perpspec] = now;
@@ -436,7 +387,7 @@ async function okxWebSocket() {
  * MAIN EXECUTION
  * ========================================== */
 async function execute() {
-  console.log(`${STATUS_COLOR}💀 Starting ${SCRIPT_NAME} - WebSocket liquidation streaming${RESET}`);
+  console.log(`${STATUS_COLOR}🚦 *LQ Starting ${SCRIPT_NAME} - WebSocket liquidation streaming${RESET}`);
 
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', `${SCRIPT_NAME} connected`);
 
@@ -445,7 +396,7 @@ async function execute() {
   okxWebSocket();
 
   process.on('SIGINT', async () => {
-    console.log(`💀 ${STATUS_COLOR}\n${SCRIPT_NAME} received SIGINT, stopping...${RESET}`);
+    console.log(`👀 ${STATUS_COLOR}\n${SCRIPT_NAME} received SIGINT, stopping...${RESET}`);
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'stopped', `${SCRIPT_NAME} stopped smoothly`);
     process.exit(0);
   });

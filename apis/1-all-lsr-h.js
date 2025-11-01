@@ -336,7 +336,7 @@ async function backfill() {
   const perpspecsStr = perpspecs.join(', ');
 
   // #1 STATUS: started ////// STATUSES ==================================
-  const message1 = `Starting ${SCRIPT_NAME} backfill for Long/Short Ratios; ${totalSymbols} symbols.`;
+  const message1 = `*LSR Starting ${SCRIPT_NAME} backfill for Long/Short Ratios; ${totalSymbols} symbols.`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', message1);
   console.log(`${STATUS_COLOR}${message1}${RESET}`);
 
@@ -389,7 +389,7 @@ async function backfill() {
           if (connectedPerpspecs.size === perpspecs.length && !connectedLogged) {
             const connectedMsg = `${perpspecsStr} connected, starting fetch.`;
             await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', connectedMsg);
-            console.log(`${STATUS_COLOR}🔧 ${connectedMsg}${RESET}`);
+            // console.log(`${STATUS_COLOR}*LSR ${connectedMsg}${RESET}`);
             connectedLogged = true;
           }
         }
@@ -408,7 +408,7 @@ async function backfill() {
         if (completedSymbolsPerPerpspec[config.perpspec].size === expectedCount && !completedPerpspecs.has(config.perpspec)) {
           const completeMsg = `${config.perpspec} backfill complete.`;
           await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', completeMsg);
-          console.log(`${STATUS_COLOR}🔧 ${completeMsg}${RESET}`);
+          console.log(`${STATUS_COLOR}*LSR ${completeMsg}${RESET}`);
           completedPerpspecs.add(config.perpspec);
         }
       } catch (err) {
@@ -436,7 +436,7 @@ async function backfill() {
 
   // Single completion log only
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-  const finalMsg = `⏱️  ${SCRIPT_NAME} backfill completed in ${duration}s!`;
+  const finalMsg = `⏱️ *LSR ${SCRIPT_NAME} backfill completed in ${duration}s!`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', finalMsg);
   console.log(finalMsg);
 }

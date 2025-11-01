@@ -1,32 +1,19 @@
 // db/dbsetup2.js 22 Oct 2025
 // ============================================================================
-// ADDENDUM SCRIPT: Safely Add New Fields to Existing Tables (No Drop/Re-create)
-// Usage: node db/dbsetup2.js [options]
-// Examples:
-//   - Add field: node dbsetup2.js --table=perp_data --field=new_metric --type=NUMERIC(20,8)
-//   - With perpspec: node dbsetup2.js --table=perp_data --field=new_metric --type=NUMERIC(20,8) --perpspec=bin-new --fields='["ts","symbol","exchange","new_metric"]'
-// Options:
-//   --table: Table name (default: perp_data)
-//   --field: New column name (required)
-//   --type: SQL type (e.g., NUMERIC(20,8), TEXT; required)
-//   --perpspec: New perpspec name (optional; updates perpspec_schema)
-//   --fields: JSON array of fields for perpspec_schema (optional; e.g., '["ts","new_field"]')
-//   --index: Add index on new field? (true/false; default: true for NUMERIC/TEXT)
+// SIMPLE ADDENDUM SCRIPT: Hardcoded Partial Unique Index Creation with Hypertable Support
+// Run with: node db/dbsetup2.js
+//
+// This script creates a partial unique index on perp_metrics for skipping rows
+// where c_chg_1m is populated, improving backfill efficiency.
+//
+// Supports TimescaleDB hypertables by avoiding CONCURRENTLY keyword.
+//
+// Additional example code for adding columns or full indexes is provided as
+// commented sections for future use.
 // ============================================================================
+
 const { Pool } = require('pg');
 require('dotenv').config();
-const yargs = require('yargs/yargs');
-const { hideBin } = require('yargs/helpers');
-
-const argv = yargs(hideBin(process.argv))
-  .option('table', { default: 'perp_data', describe: 'Target table (e.g., perp_data, perp_metrics)' })
-  .option('field', { demandOption: true, describe: 'New column name' })
-  .option('type', { demandOption: true, describe: 'SQL column type (e.g., NUMERIC(20,8))' })
-  .option('perpspec', { describe: 'New perpspec name for schema (optional)' })
-  .option('fields', { describe: 'JSON array of fields for perpspec_schema (optional)' })
-  .option('index', { default: true, type: 'boolean', describe: 'Add index on new field?' })
-  .help()
-  .argv;
 
 const pool = new Pool({
   host: process.env.DB_HOST,
@@ -36,63 +23,106 @@ const pool = new Pool({
   database: process.env.DB_NAME,
 });
 
-// ============================================================================
-// MAIN ADDENDUM LOGIC
-// ============================================================================
-async function addField() {
-  const { table, field, type, perpspec, fields: fieldsStr, index } = argv;
-  console.log(`🔧 Adding field '${field}' (${type}) to table '${table}'...`);
+// === HARD-CODED CONFIGURATION ===
+const TABLE_NAME = 'perp_metrics';
+const PARTIAL_INDEX_NAME = 'uniq_perp_metrics_null_cchg1m';
+const PARTIAL_INDEX_COLUMNS = ['ts', 'symbol', 'exchange'];
+const PARTIAL_INDEX_WHERE = 'c_chg_1m IS NULL';
 
+// === MAIN FUNCTION ===
+async function main() {
   try {
-    // Step 1: Check if column already exists
+    console.log(`🔧 Creating partial unique index '${PARTIAL_INDEX_NAME}' on table '${TABLE_NAME}' with columns (${PARTIAL_INDEX_COLUMNS.join(', ')}) WHERE ${PARTIAL_INDEX_WHERE}...`);
+
+    // Check if index exists
+    const checkIndexQuery = `
+      SELECT 1 FROM pg_indexes WHERE tablename = $1 AND indexname = $2
+    `;
+    const existsResult = await pool.query(checkIndexQuery, [TABLE_NAME, PARTIAL_INDEX_NAME]);
+    if (existsResult.rowCount > 0) {
+      console.log(`  - Index '${PARTIAL_INDEX_NAME}' already exists. Skipping creation.`);
+      return;
+    }
+
+    // Check if table is hypertable (TimescaleDB)
+    const hypertableCheckQuery = `
+      SELECT hypertable_name FROM timescaledb_information.hypertables WHERE hypertable_name = $1
+    `;
+    const hypertableResult = await pool.query(hypertableCheckQuery, [TABLE_NAME]);
+    const isHypertable = hypertableResult.rowCount > 0;
+
+    // Build create index query
+    let createIndexQuery = `CREATE UNIQUE INDEX ${PARTIAL_INDEX_NAME} ON ${TABLE_NAME} (${PARTIAL_INDEX_COLUMNS.join(', ')}) WHERE ${PARTIAL_INDEX_WHERE}`;
+    if (!isHypertable) {
+      // Use CONCURRENTLY if not hypertable
+      createIndexQuery = `CREATE UNIQUE INDEX CONCURRENTLY ${PARTIAL_INDEX_NAME} ON ${TABLE_NAME} (${PARTIAL_INDEX_COLUMNS.join(', ')}) WHERE ${PARTIAL_INDEX_WHERE}`;
+    } else {
+      console.log('  - Detected hypertable, creating index WITHOUT CONCURRENTLY (required by TimescaleDB).');
+    }
+
+    console.log(`  - Executing: ${createIndexQuery}`);
+    await pool.query(createIndexQuery);
+    console.log(`  - Partial unique index '${PARTIAL_INDEX_NAME}' created successfully.`);
+
+    // ===========================
+    // FUTURE: Add Column Example
+    // ===========================
+    /*
+    // To add a new column, uncomment and edit below:
+    const NEW_COLUMN_NAME = 'new_metric';
+    const NEW_COLUMN_TYPE = 'NUMERIC(20,8)';
+    const ADD_INDEX_ON_NEW_COLUMN = true;
+
+    console.log(`🔧 Adding field '${NEW_COLUMN_NAME}' (${NEW_COLUMN_TYPE}) to table '${TABLE_NAME}'...`);
+
     const checkColQuery = `
       SELECT column_name FROM information_schema.columns 
       WHERE table_name = $1 AND column_name = $2
     `;
-    const colExists = await pool.query(checkColQuery, [table, field]);
+    const colExists = await pool.query(checkColQuery, [TABLE_NAME, NEW_COLUMN_NAME]);
     if (colExists.rows.length > 0) {
-      console.log(`  - Column '${field}' already exists in '${table}'. Skipping.`);
-      return;
+      console.log(`  - Column '${NEW_COLUMN_NAME}' already exists in '${TABLE_NAME}'. Skipping.`);
+    } else {
+      const alterQuery = `ALTER TABLE ${TABLE_NAME} ADD COLUMN IF NOT EXISTS ${NEW_COLUMN_NAME} ${NEW_COLUMN_TYPE}`;
+      await pool.query(alterQuery);
+      console.log(`  - Added column '${NEW_COLUMN_NAME}' (${NEW_COLUMN_TYPE}) to '${TABLE_NAME}' (defaults to NULL).`);
+
+      if (ADD_INDEX_ON_NEW_COLUMN) {
+        const indexName = `idx_${TABLE_NAME}_${NEW_COLUMN_NAME}`;
+        const indexQuery = `CREATE INDEX IF NOT EXISTS ${indexName} ON ${TABLE_NAME} (${NEW_COLUMN_NAME})`;
+        await pool.query(indexQuery);
+        console.log(`  - Added index '${indexName}' on '${NEW_COLUMN_NAME}'.`);
+      }
     }
+    */
 
-    // Step 2: Add the column (safe ALTER; defaults to NULL)
-    const alterQuery = `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${field} ${type}`;
-    await pool.query(alterQuery);
-    console.log(`  - Added column '${field}' (${type}) to '${table}' (defaults to NULL).`);
+    // ===========================
+    // FUTURE: Add Full Index Example
+    // ===========================
+    /*
+    // To add a full index, uncomment and edit below:
+    const FULL_INDEX_NAME = 'idx_perp_metrics_example';
+    const FULL_INDEX_COLUMNS = ['symbol', 'exchange'];
 
-    // Step 3: Add index if requested (for queryable fields like NUMERIC/TEXT)
-    if (index) {
-      const indexName = `idx_${table}_${field}`;
-      const indexQuery = `CREATE INDEX IF NOT EXISTS ${indexName} ON ${table} (${field})`;
-      await pool.query(indexQuery);
-      console.log(`  - Added index '${indexName}' on '${field}'.`);
+    console.log(`🔧 Creating index '${FULL_INDEX_NAME}' on table '${TABLE_NAME}' with columns (${FULL_INDEX_COLUMNS.join(', ')})...`);
+
+    const checkFullIndexQuery = `
+      SELECT 1 FROM pg_indexes WHERE tablename = $1 AND indexname = $2
+    `;
+    const fullIndexExists = await pool.query(checkFullIndexQuery, [TABLE_NAME, FULL_INDEX_NAME]);
+    if (fullIndexExists.rowCount > 0) {
+      console.log(`  - Index '${FULL_INDEX_NAME}' already exists. Skipping creation.`);
+    } else {
+      const createFullIndexQuery = `CREATE INDEX CONCURRENTLY ${FULL_INDEX_NAME} ON ${TABLE_NAME} (${FULL_INDEX_COLUMNS.join(', ')})`;
+      console.log(`  - Executing: ${createFullIndexQuery}`);
+      await pool.query(createFullIndexQuery);
+      console.log(`  - Index '${FULL_INDEX_NAME}' created successfully.`);
     }
-
-    // Step 4: Update perpspec_schema if perpspec provided (legacy UI support)
-    if (perpspec) {
-      let schemaFields = fieldsStr ? JSON.parse(fieldsStr) : ['ts', 'symbol', 'exchange', field];
-      const schemaQuery = `
-        INSERT INTO perpspec_schema (perpspec_name, fields)
-        VALUES ($1, $2)
-        ON CONFLICT (perpspec_name) DO UPDATE SET
-          fields = EXCLUDED.fields, last_updated = NOW()
-      `;
-      await pool.query(schemaQuery, [perpspec, JSON.stringify(schemaFields)]);
-      console.log(`  - Registered/updated perpspec_schema for '${perpspec}' with fields: ${JSON.stringify(schemaFields)}.`);
-    }
-
-    // Step 5: Log schema backup (simple dump of table structure for records)
-    const descQuery = `SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = $1 ORDER BY ordinal_position`;
-    const desc = await pool.query(descQuery, [table]);
-    console.log(`  - Updated schema for '${table}':\n${JSON.stringify(desc.rows, null, 2)}`);
-
-    console.log(`✅ Field addition complete for '${table}'. No data loss; existing rows have NULL in new column.`);
-    console.log(`💡 Next: Update insertData/insertBackfillData merge logic to populate '${field}' based on perpspec (e.g., if (perpspec.includes('new')) row.${field} = record.${field};`);
-    console.log(`   Re-run backfill scripts if needed to populate historical data.`);
+    */
 
   } catch (error) {
-    console.error(`❌ Error adding field: ${error.message}`);
-    if (error.code === '42P01') console.log(`  - Table '${table}' does not exist. Run dbsetup.js first.`);
+    console.error(`❌ Error: ${error.message}`);
+    if (error.code === '42P01') console.log(`  - Table '${TABLE_NAME}' does not exist. Run dbsetup.js first.`);
     else if (error.code === '42703') console.log(`  - Invalid type or field name. Check SQL syntax.`);
     process.exit(1);
   } finally {
@@ -102,7 +132,7 @@ async function addField() {
 
 // Run if direct
 if (require.main === module) {
-  addField();
+  main();
 }
 
-module.exports = { addField };
+module.exports = { main };

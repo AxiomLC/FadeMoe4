@@ -224,7 +224,7 @@ async function pollSymbolAndExchange(baseSymbol, exchangeConfig) {
       if (connectedPerpspecs.size === Object.keys(EXCHANGE_CONFIG).length) {
         const message = `${Object.values(EXCHANGE_CONFIG).map(cfg => cfg.PERPSPEC).join(', ')} connected; fetching.`;
         await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', message);
-        console.log(`${STATUS_COLOR}♻️ ${message}${RESET}`);
+        console.log(`${STATUS_COLOR}🚥 ${message}${RESET}`);
       }
     }
 
@@ -237,7 +237,7 @@ async function pollSymbolAndExchange(baseSymbol, exchangeConfig) {
     completedPulls.get(perpspec).add(baseSymbol);
     const expectedCount = perpList.length;
     if (completedPulls.get(perpspec).size === expectedCount) {
-      const message = `${perpspec} 1m pull.`;
+      const message = `🚥 ${perpspec} 1m pull.`;
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', message, { perpspec });
       console.log(`${STATUS_COLOR}${message}${RESET}`);
       completedPulls.get(perpspec).clear(); // Reset for next 1m cycle
@@ -278,9 +278,9 @@ async function pollAllSymbols() {
 async function execute() {
   // Log #1: Script start
   const totalSymbols = perpList.length;
-  const startMessage = `Starting ${SCRIPT_NAME} real-time 1m pull; ${totalSymbols} symbols.`;
+  const startMessage = `🚦*OI Starting ${SCRIPT_NAME} real-time 1m pull; ${totalSymbols} symbols.`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', startMessage);
-  console.log(`${STATUS_COLOR}♻️ ${startMessage}${RESET}`);
+  console.log(`${STATUS_COLOR}${startMessage}${RESET}`);
 
   await pollAllSymbols();
 

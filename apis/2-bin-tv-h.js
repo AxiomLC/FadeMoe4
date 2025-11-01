@@ -16,7 +16,7 @@ const weightMonitor = require('../b-weight');
 const affectedSymbols = new Set();  // Track unique symbols with incomplete OHLCV for count-only warning
 
 const SCRIPT_NAME = '2-bin-tv-h.js';
-const STATUS_COLOR = '\x1b[94m'; // Light blue for status logs
+const STATUS_COLOR = '\x1b[36m'; // Light blue for status logs
 const RESET = '\x1b[0m';
 const DAYS = 10;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -313,14 +313,14 @@ async function backfill() {
   const totalSymbols = perpList.length;
 
   // Log #1: Script start
-  const startMessage = `Starting ${SCRIPT_NAME} backfill for Taker Buy/Sell Volume; ${totalSymbols} symbols.`;
+  const startMessage = `*TV Starting ${SCRIPT_NAME} backfill for Taker Buy/Sell Volume; ${totalSymbols} symbols.`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'started', startMessage);
-  console.log(`${STATUS_COLOR}🔧 ${startMessage}${RESET}`);
+  console.log(`${STATUS_COLOR}${startMessage}${RESET}`);
 
   // Log #2: Perpspec connected
   const connectMessage = `${BINANCE.perpspec} connected, starting fetch.`;
   await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'connected', connectMessage);
-  console.log(`${STATUS_COLOR}🔧 ${connectMessage}${RESET}`);
+  // console.log(`${STATUS_COLOR}${connectMessage}${RESET}`);
 
   const startTime = Date.now();
 
@@ -328,7 +328,7 @@ async function backfill() {
   const heartbeatId = setInterval(async () => {
     if (!completedPerpspecs.has(BINANCE.perpspec)) {
       // Log #3: Perpspec running
-      const runningMessage = `${BINANCE.perpspec} backfilling db.`;
+      const runningMessage = `*TV ${BINANCE.perpspec} backfilling db.`;
       await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'running', runningMessage, { perpspec: BINANCE.perpspec });
       console.log(`${STATUS_COLOR}${runningMessage}${RESET}`);
     }
@@ -362,9 +362,9 @@ async function backfill() {
         // Log #4: Perpspec completed (when all symbols done)
         if (completedSymbols.size === totalSymbols && !completedPerpspecs.has(BINANCE.perpspec)) {
           completedPerpspecs.add(BINANCE.perpspec);
-          const completeMessage = `${BINANCE.perpspec} backfill complete.`;
+          const completeMessage = `*TV ${BINANCE.perpspec} backfill complete.`;
           await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', completeMessage, { perpspec: BINANCE.perpspec });
-          console.log(`${STATUS_COLOR}🔧 ${completeMessage}${RESET}`);
+          // console.log(`${completeMessage}`);
         }
 
       } catch (error) {
@@ -403,7 +403,7 @@ async function backfill() {
   // Log #5: Full script completion
   if (completedPerpspecs.has(BINANCE.perpspec)) {
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    const finalMessage = `${SCRIPT_NAME} backfill completed in ${duration}s!`;
+    const finalMessage = `*TV ${SCRIPT_NAME} backfill completed in ${duration}s!`;
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, 'completed', finalMessage);
     console.log(`⏱️ ${finalMessage}`);
   }
