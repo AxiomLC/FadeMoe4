@@ -1,7 +1,7 @@
 // ============================================================================
 // METRICS BACKFILL - High-speed full _chg_ param calculation and insert
 // Independent from calc-metrics.js, optimized for max throughput
-// Simplified: always uses ON CONFLICT DO UPDATE (full overwrite for all fields)
+// Simplified: always uses ON CONFLICT DO UPDATE with conditional update on detect column
 // ============================================================================
 
 const dbManager = require('./dbsetup');
@@ -15,7 +15,7 @@ const STATUS_LOG_COLOR = '\x1b[35m'; // Bright cyan
 const COLOR_RESET = '\x1b[0m';
 
 // ============================================================================
-// USER CONFIGURATION - MAX SPEED SETTINGS
+// USER CONFIGURATION - MAX SPEED SETTINGS & DETECT COLUMN
 // ============================================================================
 
 // Backfill retention and buffer
@@ -28,7 +28,8 @@ const PARALLEL_SYMBOLS = 6;        // High concurrency
 const INTER_CHUNK_DELAY_MS = 0;    // No delay between chunks
 const HEARTBEAT_INTERVAL_MS = 7000;
 
-// symbolsToBackfill (include MT if in perpList)
+// Column to detect if row is populated and skip update if not null
+const DETECT_COLUMN = 'c_chg_1m';
 const symbolsToBackfill = perpList.includes('MT') ? perpList : [...perpList, 'MT'];
 // ============================================================================
 // UTILITIES
@@ -39,11 +40,10 @@ function sleep(ms) {
 }
 
 async function logStatus(status, message) {
-  // Wrapped in try-catch for robustness (apiUtils.logScriptStatus may fail without crashing main)
   try {
     await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, status, message);
-  } catch (logErr) {
-    console.warn('Logging failed:', logErr.message); // Non-critical: Continue
+  } catch {
+    // Ignore logging errors to avoid slowing down main process
   }
   console.log(`${STATUS_LOG_COLOR}${message}${COLOR_RESET}`);
 }
@@ -60,10 +60,9 @@ function calculatePercentChange(current, previous) {
 // ============================================================================
 
 async function fetchRawData(symbol, exchange, startTs, endTs) {
-  // SELECT all raw params: o,h,l,c,v, oi, pfr, lsr, lql, lqs, rsi1, rsi60, tbv, tsv
   const baseQuery = `
     SELECT ts, symbol, exchange, o, h, l, c, v, oi, pfr, lsr,
-           lql, lqs, rsi1, rsi60, tbv, tsv
+           lql, lqs, rsi1, rsi60
     FROM perp_data
     WHERE symbol = $1 AND exchange = $2 AND ts >= $3 AND ts <= $4
     ORDER BY ts ASC
@@ -73,24 +72,22 @@ async function fetchRawData(symbol, exchange, startTs, endTs) {
   const result = await dbManager.query(baseQuery, [symbol, exchange, bufferedStart, BigInt(endTs)]);
   const isMT = symbol === 'MT';
   return result.rows.map(row => ({
-    ts: Number(row.ts),
-    symbol: row.symbol,
-    exchange: row.exchange,
-    o: row.o !== null ? parseFloat(row.o) : null,
-    h: row.h !== null ? parseFloat(row.h) : null,
-    l: row.l !== null ? parseFloat(row.l) : null,
-    c: row.c !== null ? parseFloat(row.c) : null,
-    v: row.v !== null ? parseFloat(row.v) : null,
-    oi: isMT ? null : (row.oi !== null ? parseFloat(row.oi) : null),  // Explicit null for MT (prevents bad %; historical gaps null naturally)
-    pfr: isMT ? null : (row.pfr !== null ? parseFloat(row.pfr) : null),
-    lsr: isMT ? null : (row.lsr !== null ? parseFloat(row.lsr) : null),
-    lql: isMT ? null : (row.lql !== null ? parseFloat(row.lql) : null),
-    lqs: isMT ? null : (row.lqs !== null ? parseFloat(row.lqs) : null),
-    rsi1: row.rsi1 !== null ? parseFloat(row.rsi1) : null,
-    rsi60: row.rsi60 !== null ? parseFloat(row.rsi60) : null,
-    tbv: row.tbv !== null ? parseFloat(row.tbv) : null,  // Null for MT/historical OKX/Bybit; calcs handle
-    tsv: row.tsv !== null ? parseFloat(row.tsv) : null,
-  }));
+  ts: Number(row.ts),
+  symbol: row.symbol,
+  exchange: row.exchange,
+  o: row.o !== null ? parseFloat(row.o) : null,
+  h: row.h !== null ? parseFloat(row.h) : null,
+  l: row.l !== null ? parseFloat(row.l) : null,
+  c: row.c !== null ? parseFloat(row.c) : null,
+  v: row.v !== null ? parseFloat(row.v) : null,
+  oi: isMT ? null : (row.oi !== null ? parseFloat(row.oi) : null),
+  pfr: isMT ? null : (row.pfr !== null ? parseFloat(row.pfr) : null),
+  lsr: isMT ? null : (row.lsr !== null ? parseFloat(row.lsr) : null),
+  lql: isMT ? null : (row.lql !== null ? parseFloat(row.lql) : null),
+  lqs: isMT ? null : (row.lqs !== null ? parseFloat(row.lqs) : null),
+  rsi1: row.rsi1 !== null ? parseFloat(row.rsi1) : null,
+  rsi60: row.rsi60 !== null ? parseFloat(row.rsi60) : null,
+}));
 }
 
 // ============================================================================
@@ -101,7 +98,6 @@ function calculateMetricsForExchange(data) {
   if (data.length === 0) return [];
 
   const metrics = [];
-  // Explicit sort as safeguard; SQL ORDER BY ts ASC should suffice
   data.sort((a, b) => a.ts - b.ts);
 
   for (let i = 0; i < data.length; i++) {
@@ -114,77 +110,77 @@ function calculateMetricsForExchange(data) {
       oi: current.oi, pfr: current.pfr, lsr: current.lsr,
       rsi1: current.rsi1, rsi60: current.rsi60,
       lql: current.lql, lqs: current.lqs,
-      tbv: current.tbv, tsv: current.tsv,
-      // 1m changes (all raw params)
+      // 1m changes (exclude o,h,l)
       c_chg_1m: null, v_chg_1m: null,
       oi_chg_1m: null, pfr_chg_1m: null, lsr_chg_1m: null,
       rsi1_chg_1m: null, rsi60_chg_1m: null,
       lql_chg_1m: null, lqs_chg_1m: null,
-      tbv_chg_1m: null, tsv_chg_1m: null,
-      // 5m changes (all raw params)
+      // 5m changes
       c_chg_5m: null, v_chg_5m: null,
       oi_chg_5m: null, pfr_chg_5m: null, lsr_chg_5m: null,
       rsi1_chg_5m: null, rsi60_chg_5m: null,
       lql_chg_5m: null, lqs_chg_5m: null,
-      tbv_chg_5m: null, tsv_chg_5m: null,
-      // 10m changes (all raw params)
+      // 10m changes
       c_chg_10m: null, v_chg_10m: null,
       oi_chg_10m: null, pfr_chg_10m: null, lsr_chg_10m: null,
       rsi1_chg_10m: null, rsi60_chg_10m: null,
       lql_chg_10m: null, lqs_chg_10m: null,
-      tbv_chg_10m: null, tsv_chg_10m: null,
     };
 
-    // Row-specific MT check only for explicit nulling in fetch (calcs below handle nulls naturally; no specialization)
-    const isMT = current.symbol === 'MT';
-
-    // 1m changes (all params; nulls from MT/historical gaps propagate via calculatePercentChange)
+    // 1m changes
+    const isMT = data[0].symbol === 'MT';
     if (i >= 1) {
       const prev = data[i - 1];
-      metricRow.c_chg_1m = calculatePercentChange(current.c, prev.c);
-      metricRow.v_chg_1m = calculatePercentChange(current.v, prev.v);
-      metricRow.oi_chg_1m = calculatePercentChange(current.oi, prev.oi);
-      metricRow.pfr_chg_1m = calculatePercentChange(current.pfr, prev.pfr);
-      metricRow.lsr_chg_1m = calculatePercentChange(current.lsr, prev.lsr);
-      metricRow.rsi1_chg_1m = calculatePercentChange(current.rsi1, prev.rsi1);
-      metricRow.rsi60_chg_1m = calculatePercentChange(current.rsi60, prev.rsi60);
-      metricRow.lql_chg_1m = calculatePercentChange(current.lql, prev.lql);
-      metricRow.lqs_chg_1m = calculatePercentChange(current.lqs, prev.lqs);
-      metricRow.tbv_chg_1m = calculatePercentChange(current.tbv, prev.tbv);
-      metricRow.tsv_chg_1m = calculatePercentChange(current.tsv, prev.tsv);
-    }
+  metricRow.c_chg_1m = calculatePercentChange(current.c, prev.c);
+  metricRow.v_chg_1m = calculatePercentChange(current.v, prev.v);
+  if (!isMT) {
+    metricRow.oi_chg_1m = calculatePercentChange(current.oi, prev.oi);
+    metricRow.pfr_chg_1m = calculatePercentChange(current.pfr, prev.pfr);
+    metricRow.lsr_chg_1m = calculatePercentChange(current.lsr, prev.lsr);
+  }
+  metricRow.rsi1_chg_1m = calculatePercentChange(current.rsi1, prev.rsi1);
+  metricRow.rsi60_chg_1m = calculatePercentChange(current.rsi60, prev.rsi60);
+  if (!isMT) {
+    metricRow.lql_chg_1m = calculatePercentChange(current.lql, prev.lql);
+    metricRow.lqs_chg_1m = calculatePercentChange(current.lqs, prev.lqs);
+  }
+}
 
-    // 5m changes (all params; correct suffixes; nulls propagate)
+    // 5m changes
     if (i >= 5) {
       const prev = data[i - 5];
-      metricRow.c_chg_5m = calculatePercentChange(current.c, prev.c);
-      metricRow.v_chg_5m = calculatePercentChange(current.v, prev.v);
-      metricRow.oi_chg_5m = calculatePercentChange(current.oi, prev.oi);
-      metricRow.pfr_chg_5m = calculatePercentChange(current.pfr, prev.pfr);
-      metricRow.lsr_chg_5m = calculatePercentChange(current.lsr, prev.lsr);
-      metricRow.rsi1_chg_5m = calculatePercentChange(current.rsi1, prev.rsi1);
-      metricRow.rsi60_chg_5m = calculatePercentChange(current.rsi60, prev.rsi60);
-      metricRow.lql_chg_5m = calculatePercentChange(current.lql, prev.lql);
-      metricRow.lqs_chg_5m = calculatePercentChange(current.lqs, prev.lqs);
-      metricRow.tbv_chg_5m = calculatePercentChange(current.tbv, prev.tbv);
-      metricRow.tsv_chg_5m = calculatePercentChange(current.tsv, prev.tsv);
-    }
+      metricRow.c_chg_1m = calculatePercentChange(current.c, prev.c);
+  metricRow.v_chg_1m = calculatePercentChange(current.v, prev.v);
+  if (!isMT) {
+    metricRow.oi_chg_1m = calculatePercentChange(current.oi, prev.oi);
+    metricRow.pfr_chg_1m = calculatePercentChange(current.pfr, prev.pfr);
+    metricRow.lsr_chg_1m = calculatePercentChange(current.lsr, prev.lsr);
+  }
+  metricRow.rsi1_chg_1m = calculatePercentChange(current.rsi1, prev.rsi1);
+  metricRow.rsi60_chg_1m = calculatePercentChange(current.rsi60, prev.rsi60);
+  if (!isMT) {
+    metricRow.lql_chg_1m = calculatePercentChange(current.lql, prev.lql);
+    metricRow.lqs_chg_1m = calculatePercentChange(current.lqs, prev.lqs);
+  }
+}
 
-    // 10m changes (all params; correct suffixes; nulls propagate)
+    // 10m changes
     if (i >= 10) {
       const prev = data[i - 10];
-      metricRow.c_chg_10m = calculatePercentChange(current.c, prev.c);
-      metricRow.v_chg_10m = calculatePercentChange(current.v, prev.v);
-      metricRow.oi_chg_10m = calculatePercentChange(current.oi, prev.oi);
-      metricRow.pfr_chg_10m = calculatePercentChange(current.pfr, prev.pfr);
-      metricRow.lsr_chg_10m = calculatePercentChange(current.lsr, prev.lsr);
-      metricRow.rsi1_chg_10m = calculatePercentChange(current.rsi1, prev.rsi1);
-      metricRow.rsi60_chg_10m = calculatePercentChange(current.rsi60, prev.rsi60);
-      metricRow.lql_chg_10m = calculatePercentChange(current.lql, prev.lql);
-      metricRow.lqs_chg_10m = calculatePercentChange(current.lqs, prev.lqs);
-      metricRow.tbv_chg_10m = calculatePercentChange(current.tbv, prev.tbv);
-      metricRow.tsv_chg_10m = calculatePercentChange(current.tsv, prev.tsv);
-    }
+      metricRow.c_chg_1m = calculatePercentChange(current.c, prev.c);
+  metricRow.v_chg_1m = calculatePercentChange(current.v, prev.v);
+  if (!isMT) {
+    metricRow.oi_chg_1m = calculatePercentChange(current.oi, prev.oi);
+    metricRow.pfr_chg_1m = calculatePercentChange(current.pfr, prev.pfr);
+    metricRow.lsr_chg_1m = calculatePercentChange(current.lsr, prev.lsr);
+  }
+  metricRow.rsi1_chg_1m = calculatePercentChange(current.rsi1, prev.rsi1);
+  metricRow.rsi60_chg_1m = calculatePercentChange(current.rsi60, prev.rsi60);
+  if (!isMT) {
+    metricRow.lql_chg_1m = calculatePercentChange(current.lql, prev.lql);
+    metricRow.lqs_chg_1m = calculatePercentChange(current.lqs, prev.lqs);
+  }
+}
 
     metrics.push(metricRow);
   }
@@ -193,7 +189,7 @@ function calculateMetricsForExchange(data) {
 }
 
 // ============================================================================
-// INSERT METRICS BATCH - always DO UPDATE (full overwrite for all fields)
+// INSERT METRICS BATCH - always DO UPDATE with conditional update on detect column
 // ============================================================================
 
 async function insertMetricsBatch(metrics) {
@@ -201,28 +197,22 @@ async function insertMetricsBatch(metrics) {
 
   let totalInserted = 0;
   let totalSkipped = 0;
-  let chunkErrors = 0; // Track chunk failures for threshold checks
 
-  // All fields: base + all chg params for ohlcv, oi, pfr, lsr, rsi1, rsi60, tbv, tsv, lql, lqs
   const fields = [
     'ts', 'symbol', 'exchange', 'o', 'h', 'l', 'c', 'v',
     'oi', 'pfr', 'lsr', 'rsi1', 'rsi60', 'lql', 'lqs',
-    'tbv', 'tsv',
     'c_chg_1m', 'v_chg_1m',
     'oi_chg_1m', 'pfr_chg_1m', 'lsr_chg_1m',
     'rsi1_chg_1m', 'rsi60_chg_1m',
     'lql_chg_1m', 'lqs_chg_1m',
-    'tbv_chg_1m', 'tsv_chg_1m',
     'c_chg_5m', 'v_chg_5m',
     'oi_chg_5m', 'pfr_chg_5m', 'lsr_chg_5m',
     'rsi1_chg_5m', 'rsi60_chg_5m',
     'lql_chg_5m', 'lqs_chg_5m',
-    'tbv_chg_5m', 'tsv_chg_5m',
     'c_chg_10m', 'v_chg_10m',
     'oi_chg_10m', 'pfr_chg_10m', 'lsr_chg_10m',
     'rsi1_chg_10m', 'rsi60_chg_10m',
-    'lql_chg_10m', 'lqs_chg_10m',
-    'tbv_chg_10m', 'tsv_chg_10m'
+    'lql_chg_10m', 'lqs_chg_10m'
   ];
 
   for (let i = 0; i < metrics.length; i += INSERT_CHUNK_SIZE) {
@@ -235,28 +225,46 @@ async function insertMetricsBatch(metrics) {
       return val;
     }));
 
-    // Clean SQL: All fields use EXCLUDED (full overwrite; no conditional CASE - simplified per user query)
     const updateClause = `
-      o = EXCLUDED.o, h = EXCLUDED.h, l = EXCLUDED.l, c = EXCLUDED.c, v = EXCLUDED.v,
-      oi = EXCLUDED.oi, pfr = EXCLUDED.pfr, lsr = EXCLUDED.lsr,
-      rsi1 = EXCLUDED.rsi1, rsi60 = EXCLUDED.rsi60,
-      lql = EXCLUDED.lql, lqs = EXCLUDED.lqs,
-      tbv = EXCLUDED.tbv, tsv = EXCLUDED.tsv,
-      c_chg_1m = EXCLUDED.c_chg_1m, v_chg_1m = EXCLUDED.v_chg_1m,
-      oi_chg_1m = EXCLUDED.oi_chg_1m, pfr_chg_1m = EXCLUDED.pfr_chg_1m, lsr_chg_1m = EXCLUDED.lsr_chg_1m,
-      rsi1_chg_1m = EXCLUDED.rsi1_chg_1m, rsi60_chg_1m = EXCLUDED.rsi60_chg_1m,
-      lql_chg_1m = EXCLUDED.lql_chg_1m, lqs_chg_1m = EXCLUDED.lqs_chg_1m,
-      tbv_chg_1m = EXCLUDED.tbv_chg_1m, tsv_chg_1m = EXCLUDED.tsv_chg_1m,
-      c_chg_5m = EXCLUDED.c_chg_5m, v_chg_5m = EXCLUDED.v_chg_5m,
-      oi_chg_5m = EXCLUDED.oi_chg_5m, pfr_chg_5m = EXCLUDED.pfr_chg_5m, lsr_chg_5m = EXCLUDED.lsr_chg_5m,
-      rsi1_chg_5m = EXCLUDED.rsi1_chg_5m, rsi60_chg_5m = EXCLUDED.rsi60_chg_5m,
-      lql_chg_5m = EXCLUDED.lql_chg_5m, lqs_chg_5m = EXCLUDED.lqs_chg_5m,
-      tbv_chg_5m = EXCLUDED.tbv_chg_5m, tsv_chg_5m = EXCLUDED.tsv_chg_5m,
-      c_chg_10m = EXCLUDED.c_chg_10m, v_chg_10m = EXCLUDED.v_chg_10m,
-      oi_chg_10m = EXCLUDED.oi_chg_10m, pfr_chg_10m = EXCLUDED.pfr_chg_10m, lsr_chg_10m = EXCLUDED.lsr_chg_10m,
-      rsi1_chg_10m = EXCLUDED.rsi1_chg_10m, rsi60_chg_10m = EXCLUDED.rsi60_chg_10m,
-      lql_chg_10m = EXCLUDED.lql_chg_10m, lqs_chg_10m = EXCLUDED.lqs_chg_10m,
-      tbv_chg_10m = EXCLUDED.tbv_chg_10m, tsv_chg_10m = EXCLUDED.tsv_chg_10m
+      o = EXCLUDED.o,
+      h = EXCLUDED.h,
+      l = EXCLUDED.l,
+      c = EXCLUDED.c,
+      v = EXCLUDED.v,
+      oi = EXCLUDED.oi,
+      pfr = EXCLUDED.pfr,
+      lsr = EXCLUDED.lsr,
+      rsi1 = EXCLUDED.rsi1,
+      rsi60 = EXCLUDED.rsi60,
+      lql = EXCLUDED.lql,
+      lqs = EXCLUDED.lqs,
+      c_chg_1m = CASE WHEN perp_metrics.${DETECT_COLUMN} IS NULL THEN EXCLUDED.c_chg_1m ELSE perp_metrics.c_chg_1m END,
+      v_chg_1m = CASE WHEN perp_metrics.${DETECT_COLUMN} IS NULL THEN EXCLUDED.v_chg_1m ELSE perp_metrics.v_chg_1m END,
+      oi_chg_1m = CASE WHEN perp_metrics.${DETECT_COLUMN} IS NULL THEN EXCLUDED.oi_chg_1m ELSE perp_metrics.oi_chg_1m END,
+      pfr_chg_1m = CASE WHEN perp_metrics.${DETECT_COLUMN} IS NULL THEN EXCLUDED.pfr_chg_1m ELSE perp_metrics.pfr_chg_1m END,
+      lsr_chg_1m = CASE WHEN perp_metrics.${DETECT_COLUMN} IS NULL THEN EXCLUDED.lsr_chg_1m ELSE perp_metrics.lsr_chg_1m END,
+      rsi1_chg_1m = CASE WHEN perp_metrics.${DETECT_COLUMN} IS NULL THEN EXCLUDED.rsi1_chg_1m ELSE perp_metrics.rsi1_chg_1m END,
+      rsi60_chg_1m = CASE WHEN perp_metrics.${DETECT_COLUMN} IS NULL THEN EXCLUDED.rsi60_chg_1m ELSE perp_metrics.rsi60_chg_1m END,
+      lql_chg_1m = CASE WHEN perp_metrics.${DETECT_COLUMN} IS NULL THEN EXCLUDED.lql_chg_1m ELSE perp_metrics.lql_chg_1m END,
+      lqs_chg_1m = CASE WHEN perp_metrics.${DETECT_COLUMN} IS NULL THEN EXCLUDED.lqs_chg_1m ELSE perp_metrics.lqs_chg_1m END,
+      c_chg_5m = EXCLUDED.c_chg_5m,
+      v_chg_5m = EXCLUDED.v_chg_5m,
+      oi_chg_5m = EXCLUDED.oi_chg_5m,
+      pfr_chg_5m = EXCLUDED.pfr_chg_5m,
+      lsr_chg_5m = EXCLUDED.lsr_chg_5m,
+      rsi1_chg_5m = EXCLUDED.rsi1_chg_5m,
+      rsi60_chg_5m = EXCLUDED.rsi60_chg_5m,
+      lql_chg_5m = EXCLUDED.lql_chg_5m,
+      lqs_chg_5m = EXCLUDED.lqs_chg_5m,
+      c_chg_10m = EXCLUDED.c_chg_10m,
+      v_chg_10m = EXCLUDED.v_chg_10m,
+      oi_chg_10m = EXCLUDED.oi_chg_10m,
+      pfr_chg_10m = EXCLUDED.pfr_chg_10m,
+      lsr_chg_10m = EXCLUDED.lsr_chg_10m,
+      rsi1_chg_10m = EXCLUDED.rsi1_chg_10m,
+      rsi60_chg_10m = EXCLUDED.rsi60_chg_10m,
+      lql_chg_10m = EXCLUDED.lql_chg_10m,
+      lqs_chg_10m = EXCLUDED.lqs_chg_10m
     `;
 
     const query = format(
@@ -272,7 +280,6 @@ async function insertMetricsBatch(metrics) {
       totalInserted += res.rowCount || chunk.length;
     } catch (err) {
       console.error(`Insert chunk error: ${err.message}`);
-      chunkErrors++; // Increment for threshold checks
     }
 
     if (INTER_CHUNK_DELAY_MS > 0 && i + INSERT_CHUNK_SIZE < metrics.length) {
@@ -280,7 +287,7 @@ async function insertMetricsBatch(metrics) {
     }
   }
 
-  return { totalInserted, totalSkipped, chunkErrors }; // Return chunkErrors
+  return { totalInserted, totalSkipped };
 }
 
 // ============================================================================
@@ -290,29 +297,26 @@ async function insertMetricsBatch(metrics) {
 async function backfillSymbol(symbol, retentionStart, endTs) {
   let totalInserted = 0;
   let totalSkipped = 0;
-  let localErrors = 0; // Track per-symbol errors
   for (const exchange of ['bin', 'byb', 'okx']) {
     try {
       const rawData = await fetchRawData(symbol, exchange, retentionStart, endTs);
       if (rawData.length === 0) continue;
       const metrics = calculateMetricsForExchange(rawData);
       if (metrics.length === 0) continue;
-      // Explicit sort as safeguard before insert
+      // Sort metrics before insert
       metrics.sort((a, b) => {
         if (a.ts !== b.ts) return Number(a.ts) - Number(b.ts);
         if (a.symbol !== b.symbol) return a.symbol.localeCompare(b.symbol);
         return a.exchange.localeCompare(b.exchange);
       });
-      const { totalInserted: inserted, totalSkipped: skipped, chunkErrors } = await insertMetricsBatch(metrics);
+      const { totalInserted: inserted, totalSkipped: skipped } = await insertMetricsBatch(metrics);
       totalInserted += inserted;
       totalSkipped += skipped;
-      localErrors += chunkErrors;
     } catch (err) {
       console.error(`Error backfilling ${symbol} on ${exchange}: ${err.message}`);
-      localErrors++;
     }
   }
-  return { totalInserted, totalSkipped, errors: localErrors };
+  return { totalInserted, totalSkipped };
 }
 
 // ============================================================================
@@ -330,6 +334,7 @@ async function runBackfill() {
   console.log(`   Insert chunk size: ${INSERT_CHUNK_SIZE}`);
   console.log(`   Parallel symbols: ${PARALLEL_SYMBOLS}`);
   console.log(`   Inter-chunk delay: ${INTER_CHUNK_DELAY_MS}ms`);
+  console.log(`   Detect column for conditional update: ${DETECT_COLUMN}`);
   console.log(`${'='.repeat(80)}\n`);
 
   await logStatus('started', `${SCRIPT_NAME} started - backfilling perp_metrics.`);
@@ -338,7 +343,7 @@ async function runBackfill() {
   let totalSkipped = 0;
   let processedCount = 0;
   let errorCount = 0;
-  const totalTasks = symbolsToBackfill.length;
+  const totalTasks = perpList.length;
 
   // Heartbeat logger
   const heartbeat = setInterval(() => {
@@ -349,44 +354,18 @@ async function runBackfill() {
 
   try {
     const tasks = symbolsToBackfill.map(symbol => limit(async () => {
-      const { totalInserted: inserted, errors: symErrors } = await backfillSymbol(symbol, retentionStart, endTs);
+      const { totalInserted: inserted } = await backfillSymbol(symbol, retentionStart, endTs);
       processedCount++;
       totalInserted += inserted;
-      errorCount += symErrors || (inserted === 0 ? 1 : 0); // Include chunk errors and no-insert as errors
+      if (inserted === 0) errorCount++;
     }));
 
     await Promise.all(tasks);
 
     clearInterval(heartbeat);
 
-    // Critical error thresholds (throw if >20% symbols fail or >50% no data; aware of missing MT/historical data but stop only on high rates)
-    if (errorCount > 0.2 * totalTasks) {
-      throw new Error(`Too many failures (incl. chunks/symbols): ${errorCount}/${totalTasks} (>20%)`);
-    }
-    if (errorCount > 0.5 * totalTasks) {
-      throw new Error(`Too much missing raw data: ${errorCount}/${totalTasks} (>50%)`);
-    }
-
-    // tbv/tsv null check warning (log if >80% empty for historical OKX/Bybit/MT, but continue)
-    try {
-      const nullCheckQuery = `
-        SELECT 
-          (COUNT(*) FILTER (tbv_chg_1m IS NULL) * 1.0 / COUNT(*)) as tbv_null_pct,
-          (COUNT(*) FILTER (tsv_chg_1m IS NULL) * 1.0 / COUNT(*)) as tsv_null_pct
-        FROM perp_metrics WHERE ts >= $1
-      `;
-      const nullResult = await dbManager.query(nullCheckQuery, [BigInt(retentionStart)]);
-      const tbvPct = nullResult.rows[0].tbv_null_pct;
-      const tsvPct = nullResult.rows[0].tsv_null_pct;
-      if (tbvPct > 0.8 || tsvPct > 0.8) {
-        console.warn(`⚠️  High null rate in tbv/tsv changes: TBV ${ (tbvPct * 100).toFixed(1) }%, TSV ${ (tsvPct * 100).toFixed(1) }% (expected for MT/OKX/Bybit historical; continuing)`);
-      }
-    } catch (warnErr) {
-      console.warn('Could not check tbv/tsv null rates:', warnErr.message); // Non-critical
-    }
-
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    const status = errorCount === 0 ? 'completed' : 'partial';
+    const status = errorCount / totalTasks < 0.1 ? 'completed' : 'partial';
 
     await logStatus(status, `Backfill ${status}: ${totalInserted} rows inserted, ${errorCount} errors in ${duration}s`);
     console.log(`\n${'='.repeat(80)}`);
@@ -401,20 +380,19 @@ async function runBackfill() {
     clearInterval(heartbeat);
     console.error(`\n\uD83D\uDCA5 Backfill failed: ${err.message}`);
     await logStatus('error', `Backfill failed: ${err.message}`);
-    throw err; // Re-throw to propagate
   } finally {
-    // Do not close pool here - shared with calc-metrics.js continuous mode
+    // await dbManager.close();  COMMENT OUT, Dont close pool- calc-metrics needs it.
   }
 }
 
 // ============================================================================
-// GRACEFUL SHUTDOWN (Do not close pool - shared)
+// GRACEFUL SHUTDOWN
 // ============================================================================
 
 async function gracefulShutdown(signal) {
   console.log(`\n\u26A0\uFE0F Received ${signal}, shutting down gracefully...`);
   await logStatus('stopped', `${SCRIPT_NAME} stopped by ${signal}.`);
-  // Do not call dbManager.close() - pool is shared with calc-metrics.js; let it handle shutdown
+  await dbManager.close();
   process.exit(0);
 }
 

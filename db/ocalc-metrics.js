@@ -21,7 +21,6 @@ const COLOR_RESET = '\x1b[0m';
 // ============================================================================
 const DB_RETENTION_DAYS = 10;
 const LOOKBACK_MINUTES = 15;
-const BUFFER_MS = 10 * 60 * 1000; // 10min buffer for window calcs (NEW: Added for edge cases in 5m/10m)
 const CALCULATION_INTERVAL_MS = 60000; // 1 minute
 const HEARTBEAT_INTERVAL_MS = 15000;   // 1 minute status update
 
@@ -42,12 +41,7 @@ function sleep(ms) {
 }
 
 async function logStatus(status, message) {
-  // UPDATED: Wrapped in try-catch for robustness (apiUtils.logScriptStatus may fail without crashing main)
-  try {
-    await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, status, message);
-  } catch (logErr) {
-    console.warn('Logging failed:', logErr.message); // Non-critical: Continue
-  }
+  await apiUtils.logScriptStatus(dbManager, SCRIPT_NAME, status, message);
   console.log(`${STATUS_LOG_COLOR}${message}${COLOR_RESET}`);
 }
 
@@ -145,7 +139,6 @@ function calculateMetricsForExchange(data) {
   if (data.length === 0) return [];
 
   const metrics = [];
-  // UPDATED: Explicit sort as safeguard; SQL ORDER BY ts ASC should suffice
   data.sort((a, b) => a.ts - b.ts);
 
   for (let i = 0; i < data.length; i++) {
@@ -173,61 +166,60 @@ function calculateMetricsForExchange(data) {
       lql_chg_10m: null, lqs_chg_10m: null
     };
 
-    // UPDATED: Row-specific MT check to handle potential mixed batches safely (per comment #2)
-    const isMT = current.symbol === 'MT';
+    const isMT = data[0].symbol === 'MT';
     // 1m changes
     if (i >= 1) {
-      const prev = data[i - 1];
-      metricRow.c_chg_1m = calculatePercentChange(current.c, prev.c);
-      metricRow.v_chg_1m = calculatePercentChange(current.v, prev.v);
-      if (!isMT) {
-        metricRow.oi_chg_1m = calculatePercentChange(current.oi, prev.oi);
-        metricRow.pfr_chg_1m = calculatePercentChange(current.pfr, prev.pfr);
-        metricRow.lsr_chg_1m = calculatePercentChange(current.lsr, prev.lsr);
-        metricRow.tbv_chg_1m = calculatePercentChange(current.tbv, prev.tbv);
-        metricRow.tsv_chg_1m = calculatePercentChange(current.tsv, prev.tsv);
-        metricRow.lql_chg_1m = calculatePercentChange(current.lql, prev.lql);
-        metricRow.lqs_chg_1m = calculatePercentChange(current.lqs, prev.lqs);
-      }
-      metricRow.rsi1_chg_1m = calculatePercentChange(current.rsi1, prev.rsi1);
-      metricRow.rsi60_chg_1m = calculatePercentChange(current.rsi60, prev.rsi60);
-    }
+  const prev = data[i - 1];
+  metricRow.c_chg_1m = calculatePercentChange(current.c, prev.c);
+  metricRow.v_chg_1m = calculatePercentChange(current.v, prev.v);
+  if (!isMT) {
+    metricRow.oi_chg_1m = calculatePercentChange(current.oi, prev.oi);
+    metricRow.pfr_chg_1m = calculatePercentChange(current.pfr, prev.pfr);
+    metricRow.lsr_chg_1m = calculatePercentChange(current.lsr, prev.lsr);
+    metricRow.tbv_chg_1m = calculatePercentChange(current.tbv, prev.tbv);
+    metricRow.tsv_chg_1m = calculatePercentChange(current.tsv, prev.tsv);
+    metricRow.lql_chg_1m = calculatePercentChange(current.lql, prev.lql);
+    metricRow.lqs_chg_1m = calculatePercentChange(current.lqs, prev.lqs);
+  }
+  metricRow.rsi1_chg_1m = calculatePercentChange(current.rsi1, prev.rsi1);
+  metricRow.rsi60_chg_1m = calculatePercentChange(current.rsi60, prev.rsi60);
+}
 
-    // 5m changes (UPDATED: Fixed assignments to _chg_5m suffixes; added tbv/tsv calcs; per comment #1)
+    // 5m changes
     if (i >= 5) {
       const prev = data[i - 5];
       metricRow.c_chg_5m = calculatePercentChange(current.c, prev.c);
       metricRow.v_chg_5m = calculatePercentChange(current.v, prev.v);
       if (!isMT) {
-        metricRow.oi_chg_5m = calculatePercentChange(current.oi, prev.oi);
-        metricRow.pfr_chg_5m = calculatePercentChange(current.pfr, prev.pfr);
-        metricRow.lsr_chg_5m = calculatePercentChange(current.lsr, prev.lsr);
-        metricRow.tbv_chg_5m = calculatePercentChange(current.tbv, prev.tbv);
-        metricRow.tsv_chg_5m = calculatePercentChange(current.tsv, prev.tsv);
-        metricRow.lql_chg_5m = calculatePercentChange(current.lql, prev.lql);
-        metricRow.lqs_chg_5m = calculatePercentChange(current.lqs, prev.lqs);
-      }
-      metricRow.rsi1_chg_5m = calculatePercentChange(current.rsi1, prev.rsi1);
-      metricRow.rsi60_chg_5m = calculatePercentChange(current.rsi60, prev.rsi60);
-    }
+    metricRow.oi_chg_1m = calculatePercentChange(current.oi, prev.oi);
+    metricRow.pfr_chg_1m = calculatePercentChange(current.pfr, prev.pfr);
+    metricRow.lsr_chg_1m = calculatePercentChange(current.lsr, prev.lsr);
+    metricRow.tbv_chg_1m = calculatePercentChange(current.tbv, prev.tbv);
+    metricRow.tsv_chg_1m = calculatePercentChange(current.tsv, prev.tsv);
+    metricRow.lql_chg_1m = calculatePercentChange(current.lql, prev.lql);
+    metricRow.lqs_chg_1m = calculatePercentChange(current.lqs, prev.lqs);
+  }
+  metricRow.rsi1_chg_1m = calculatePercentChange(current.rsi1, prev.rsi1);
+  metricRow.rsi60_chg_1m = calculatePercentChange(current.rsi60, prev.rsi60);
+}
 
-    // 10m changes (UPDATED: Fixed assignments to _chg_10m suffixes; added tbv/tsv calcs; per comment #1)
+    // 10m changes
     if (i >= 10) {
       const prev = data[i - 10];
       metricRow.c_chg_10m = calculatePercentChange(current.c, prev.c);
       metricRow.v_chg_10m = calculatePercentChange(current.v, prev.v);
       if (!isMT) {
-        metricRow.oi_chg_10m = calculatePercentChange(current.oi, prev.oi);
-        metricRow.pfr_chg_10m = calculatePercentChange(current.pfr, prev.pfr);
-        metricRow.lsr_chg_10m = calculatePercentChange(current.lsr, prev.lsr);
-        metricRow.tbv_chg_10m = calculatePercentChange(current.tbv, prev.tbv);
-        metricRow.tsv_chg_10m = calculatePercentChange(current.tsv, prev.tsv);
-        metricRow.lql_chg_10m = calculatePercentChange(current.lql, prev.lql);
-        metricRow.lqs_chg_10m = calculatePercentChange(current.lqs, prev.lqs);
-      }
-      metricRow.rsi1_chg_10m = calculatePercentChange(current.rsi1, prev.rsi1);
-      metricRow.rsi60_chg_10m = calculatePercentChange(current.rsi60, prev.rsi60);
-    }
+    metricRow.oi_chg_1m = calculatePercentChange(current.oi, prev.oi);
+    metricRow.pfr_chg_1m = calculatePercentChange(current.pfr, prev.pfr);
+    metricRow.lsr_chg_1m = calculatePercentChange(current.lsr, prev.lsr);
+    metricRow.tbv_chg_1m = calculatePercentChange(current.tbv, prev.tbv);
+    metricRow.tsv_chg_1m = calculatePercentChange(current.tsv, prev.tsv);
+    metricRow.lql_chg_1m = calculatePercentChange(current.lql, prev.lql);
+    metricRow.lqs_chg_1m = calculatePercentChange(current.lqs, prev.lqs);
+  }
+  metricRow.rsi1_chg_1m = calculatePercentChange(current.rsi1, prev.rsi1);
+  metricRow.rsi60_chg_1m = calculatePercentChange(current.rsi60, prev.rsi60);
+}
 
     metrics.push(metricRow);
   }
@@ -268,8 +260,7 @@ async function processSymbol(symbol, startTs, endTs) {
 async function calculateAllMetrics() {
   const startTime = Date.now();
   const now = Date.now();
-  // UPDATED: Added buffer to startTs for edge cases in 5m/10m calcs
-  const startTs = now - (LOOKBACK_MINUTES * 60 * 1000 + BUFFER_MS);
+  const startTs = now - (LOOKBACK_MINUTES * 60 * 1000);
   const endTs = now;
 
   try {
@@ -280,7 +271,7 @@ async function calculateAllMetrics() {
 
     // Process symbols sequentially with batching
     for (let i = 0; i < symbolsToProcess.length; i++) {
-      const symbol = symbolsToProcess[i];
+    const symbol = symbolsToProcess[i];
       const result = await processSymbol(symbol, startTs, endTs);
 
       if (result.success) {
@@ -291,7 +282,7 @@ async function calculateAllMetrics() {
       }
 
       // Insert when batch is full or at end of list
-      const isBatchFull = pendingMetrics.length > 0 && ((i + 1) % SYMBOL_BATCH_SIZE === 0 || i === symbolsToProcess.length - 1); // UPDATED: Fixed to symbolsToProcess.length
+      const isBatchFull = pendingMetrics.length > 0 && ((i + 1) % SYMBOL_BATCH_SIZE === 0 || i === perpList.length - 1);
       
       if (isBatchFull) {
         // Sort batch before insert
@@ -307,21 +298,12 @@ async function calculateAllMetrics() {
       }
     }
 
-    // UPDATED: Critical error thresholds (per comment #2: Stop if >20% symbols fail or >50% no data)
-    const totalSymbols = symbolsToProcess.length;
-    if (errorCount > 0.2 * totalSymbols) {
-      throw new Error(`Too many symbol failures: ${errorCount}/${totalSymbols} (>20%)`);
-    }
-    if (errorCount > 0.5 * totalSymbols) {
-      throw new Error(`Too much missing raw data: ${errorCount}/${totalSymbols} (>50%)`);
-    }
-
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     const success = errorCount === 0;
 
     if (success) {
       await logStatus('running', 
-        `Calc complete: ${totalMetricsCalculated} metrics in ${duration}s (${successCount}/${totalSymbols} symbols)`);
+        `Calc complete: ${totalMetricsCalculated} metrics in ${duration}s (${successCount}/${perpList.length} symbols)`);
     } else {
       await logStatus('error', 
         `Calc completed with ${errorCount} errors: ${totalMetricsCalculated} metrics in ${duration}s`);
@@ -368,11 +350,6 @@ async function runContinuously() {
       await calculateAllMetrics();
     } catch (error) {
       console.error('⚠️  Calculation cycle error:', error.message);
-      // UPDATED: In continuous mode, check thresholds per cycle and stop if critical (non-critical: log and continue)
-      if (error.message.includes('Too many') || error.message.includes('missing raw data')) {
-        console.error('Critical error threshold exceeded - stopping continuous mode');
-        await gracefulShutdown('CRITICAL_ERROR');
-      }
     }
   }, CALCULATION_INTERVAL_MS);
 }

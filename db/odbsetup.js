@@ -1,4 +1,4 @@
-// db/dbsetup.js 24 Oct 2025  LINE #40 timeout and pool #s
+// db/dbsetup.js 24 Oct 2025
 // ============================================================================
 // DATABASE SETUP & MANAGER  pool max=50 supports parallel without queueing. adds a insertWithRetry helper for 
 // deadlock resilience (retry 3x PG code 40P01 with backoff) optimizes insertBackfillData with 100k-row chunking,
@@ -31,10 +31,9 @@ class DatabaseManager {
       user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
-      max: parseInt(process.env.DB_POOL_MAX) || 60, // Tunable via env
-      connectionTimeoutMillis: 30000,
-      idleTimeoutMillis: 30000,
-      acquireTimeoutMillis: 60000  // NEW: 60s wait for pool slot (prevents indefinite hangs)
+      max: parseInt(process.env.DB_POOL_MAX) || 50, // Tunable via env
+      connectionTimeoutMillis: 5000,
+      idleTimeoutMillis: 30000
     });
 
     // NEW: Error handler for pool (logs issues without crashing)
@@ -173,14 +172,8 @@ await this.pool.query(
       await this.pool.query(`SELECT create_hypertable('perp_metrics', 'ts', if_not_exists => TRUE)`);
       console.log('  - Created table: perp_metrics');
 
-// =============Indexes for performance=================================
-        await this.pool.query(`
-        CREATE INDEX IF NOT EXISTS idx_metrics_filter 
-        ON perp_metrics (symbol, exchange, ts)
-        `);
-        console.log('  - Created composite index for symbol+exchange+ts');
-
-      /*4 NOV removed  const indexQueries = [
+      // Indexes for performance
+      const indexQueries = [
         'c_chg_1m', 'c_chg_5m', 'c_chg_10m',
         'v_chg_1m', 'v_chg_5m', 'v_chg_10m',
         'oi_chg_1m', 'oi_chg_5m', 'oi_chg_10m',
@@ -199,9 +192,8 @@ await this.pool.query(
         await this.pool.query(query);
         console.log(`  - Created index for ${query.split('ON perp_metrics (')[1].split(')')[0]}`);
       }
-        */
-      //4 NOV removed : await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_perp_metrics_symbol_exchange ON perp_metrics (symbol, exchange)`);
-      //console.log('  - Created index for symbol, exchange on perp_metrics');
+      await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_perp_metrics_symbol_exchange ON perp_metrics (symbol, exchange)`);
+      console.log('  - Created index for symbol, exchange on perp_metrics');
 
       // perp_status: Unchanged
       await this.pool.query(`

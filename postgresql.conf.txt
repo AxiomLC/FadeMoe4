@@ -126,7 +126,7 @@ max_connections = 100			# (change requires restart)
 
 # - Memory -
 
-shared_buffers = 2GB			# min 128kB // Rule: 25% of RAM for dedicated DB server
+shared_buffers = 3GB			# min 128kB // Rule: 25% of RAM for dedicated DB server
 					# (change requires restart)
 #huge_pages = try			# on, off, or try
 					# (change requires restart)
@@ -205,7 +205,7 @@ dynamic_shared_memory_type = windows	# the default is usually the first option
 #maintenance_io_concurrency = 10	# 1-1000; 0 disables prefetching
 #io_combine_limit = 128kB		# usually 1-32 blocks (depends on OS)
 max_worker_processes = 35		# (change requires restart)
-max_parallel_workers_per_gather = 8	# limited by max_parallel_workers
+max_parallel_workers_per_gather = 16	# limited by max_parallel_workers
 #max_parallel_maintenance_workers = 2	# limited by max_parallel_workers
 max_parallel_workers = 16		# number of max_worker_processes that
 					# can be used in parallel operations
@@ -239,7 +239,7 @@ max_parallel_workers = 16		# number of max_worker_processes that
 					# off, pglz, lz4, zstd, or on
 #wal_init_zero = on			# zero-fill new WAL files
 #wal_recycle = on			# recycle WAL files
-wal_buffers = 16MB			# min 32kB, -1 sets based on shared_buffers
+wal_buffers = 20MB			# min 32kB, -1 sets based on shared_buffers
 					# (change requires restart)
 #wal_writer_delay = 200ms		# 1-10000 milliseconds
 #wal_writer_flush_after = 1MB		# measured in pages, 0 disables
@@ -668,10 +668,10 @@ autovacuum_naptime = 10		# time between autovacuum runs
 						# vacuums
 #autovacuum_analyze_threshold = 50	# min number of row updates before
 					# analyze
-#autovacuum_vacuum_scale_factor = 0.2	# fraction of table size before vacuum
+#autovacuum_vacuum_scale_factor = 0.1	# fraction of table size before vacuum
 #autovacuum_vacuum_insert_scale_factor = 0.2	# fraction of inserts over table
 						# size before insert vacuum
-#autovacuum_analyze_scale_factor = 0.1	# fraction of table size before analyze
+#autovacuum_analyze_scale_factor = 0.05	# fraction of table size before analyze
 #autovacuum_freeze_max_age = 200000000	# maximum XID age before forced vacuum
 					# (change requires restart)
 #autovacuum_multixact_freeze_max_age = 400000000	# maximum multixact age
@@ -783,7 +783,7 @@ shared_preload_libraries = 'timescaledb'		# (change requires restart)
 #deadlock_timeout = 1s
 max_locks_per_transaction = 256		# min 10
 					# (change requires restart)
-#max_pred_locks_per_transaction = 64	# min 10
+#max_pred_locks_per_transaction = 256	# min 10
 					# (change requires restart)
 #max_pred_locks_per_relation = -2	# negative values mean
 					# (max_pred_locks_per_transaction
@@ -843,6 +843,6 @@ max_pred_locks_per_transaction = 256    # ADD THIS - for serializable transactio
 #------------------------------------------------------------------------------
 
 # Add settings for extensions here
-timescaledb.max_background_workers = 16
+timescaledb.max_background_workers = 22
 timescaledb.last_tuned = '2025-09-20T23:06:55+02:00'
 timescaledb.last_tuned_version = '0.18.1'

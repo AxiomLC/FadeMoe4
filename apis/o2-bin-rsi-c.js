@@ -199,11 +199,8 @@ async function pollSymbol(symbol) {
     const latestRsi1 = rsi1Values[rsi1Values.length - 1];
     const latestRsi60 = rsi60Values.length > 0 ? rsi60Values[rsi60Values.length - 1] : { rsi: null };
 
-    // 2 Nov 25 EDIT *** Insert at present ts (use current system time rounded down to nearest minute)
-    const now = Date.now(); // was single line: const presentTs = latestRsi1.ts.getTime();
-    const candleDurationMs = 60 * 1000;
-    const presentTs = now - (now % candleDurationMs);
-
+    // Insert at present ts (latest 1m ts, with both RSIs) - unified format
+    const presentTs = latestRsi1.ts.getTime();
     const insertData = [{
       ts: apiUtils.toMillis(BigInt(presentTs)),
       symbol: symbol,
