@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FadeMoe4 Dashboard</title>
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+
+<main>
+  <!-- Selectors, Refresh, Pagination in one row -->
+  <section class="controls selectors-row">
+    <div class="multi-select" id="symbol-selector">
+      <button class="multi-select-btn">Symbols ▼</button>
+      <div class="multi-select-dropdown" id="symbol-dropdown"></div>
+    </div>
+    <div class="multi-select" id="exchange-selector">
+      <button class="multi-select-btn">Exch ▼</button>
+      <div class="multi-select-dropdown" id="exchange-dropdown"></div>
+    </div>
+    <div class="multi-select" id="params-selector">
+      <button class="multi-select-btn">Params ▼</button>
+      <div class="multi-select-dropdown" id="params-dropdown"></div>
+    </div>
+    <button id="refresh-btn" class="btn btn-normal glow-blue">Refresh</button>
+
+    <button id="prev-page-btn" class="btn btn-small">← Previous</button>
+    <input type="number" id="page-input" min="1" value="1" class="page-input" inputmode="numeric" pattern="[0-9]*" />
+    <button id="go-to-page-btn" class="btn btn-small">Go</button>
+    <button id="next-page-btn" class="btn btn-small">Next →</button>
+    <span id="page-info" class="page-info">Page 1 of 1</span>
+    <span id="total-pages-display" class="page-info">Total Pages: 0</span>
+  </section>
+
+  <!-- DB View -->
+  <section id="db-view" class="content-section" 
+    style="display:block; justify-content:flex-start; align-items:flex-start; text-align:left;">
+    
+    <div class="table-container" 
+         style="margin:0; padding:0; background:#1e1e2f; overflow-x:auto; border-radius:8px; text-align:left;">
+      
+      <table id="data-table" class="data-table" 
+             style="width:auto; margin-left:0; margin-right:auto; border-collapse:collapse; table-layout:auto; text-align:left;">
+        <thead>
+          <tr id="table-header-row" style="text-align:left;"></tr>
+        </thead>
+        <tbody id="table-body" style="text-align:left;"></tbody>
+      </table>
+
+      <div id="table-message" class="loading" 
+           style="text-align:left; padding:4px 6px;">Select filters and click Refresh to view data</div>
+    </div>
+  </section>
+</main>
+
+<script src="js/uifunctions.js"></script>
+<script src="js/controls.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

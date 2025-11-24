@@ -7,77 +7,99 @@
 <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
-<header>
-  <h1>FadeMoe4 Dashboard</h1>
+<header style="display: flex; align-items: center; justify-content: flex-start; gap: 10px;">
+  <img src="Logo13b.png" alt="Logo" style="height:130px;" />
+  <h1 style="margin: 0 200px 0 0;">FadeMoe</h1>
   <div id="system-status-box" class="status-box-container"></div>
 </header>
 
 <main>
   <!-- View Toggle Buttons -->
   <section class="controls">
-    <button id="view-db-btn" class="btn btn-normal btn-active">View DB</button>
+    <button id="view-db-btn" class="btn btn-normal btn-active glow-blue">View DB</button>
     <button id="view-alerts-btn" class="btn btn-normal">Alert Cards</button>
     <button id="view-backtester-btn" class="btn btn-normal">Backtester</button>
   </section>
 
-  <!-- Selectors, Refresh, Pagination in one row -->
-  <section class="controls selectors-row">
-    <div class="multi-select" id="symbol-selector">
-      <button class="multi-select-btn">Symbols ▼</button>
-      <div class="multi-select-dropdown" id="symbol-dropdown"></div>
-    </div>
-    <div class="multi-select" id="exchange-selector">
-      <button class="multi-select-btn">Exch ▼</button>
-      <div class="multi-select-dropdown" id="exchange-dropdown"></div>
-    </div>
-    <div class="multi-select" id="params-selector">
-      <button class="multi-select-btn">Params ▼</button>
-      <div class="multi-select-dropdown" id="params-dropdown"></div>
-    </div>
-    <button id="refresh-btn" class="btn btn-normal glow-blue">Refresh</button>
-
-    <button id="prev-page-btn" class="btn btn-small">← Previous</button>
-    <input type="number" id="page-input" min="1" value="1" class="page-input" inputmode="numeric" pattern="[0-9]*" />
-    <button id="go-to-page-btn" class="btn btn-small">Go</button>
-    <button id="next-page-btn" class="btn btn-small">Next →</button>
-    <span id="page-info" class="page-info">Page 1 of 1</span>
-    <span id="total-pages-display" class="page-info">Total Pages: 0</span>
-  </section>
-
-<!-- DB View -->
-<section id="db-view" class="content-section" 
-  style="display:block; justify-content:flex-start; align-items:flex-start; text-align:left;">
-  
-  <div class="table-container" 
-       style="margin:0; padding:0; background:#1e1e2f; overflow-x:auto; border-radius:8px; text-align:left;">
-    
-    <table id="data-table" class="data-table" 
-           style="width:auto; margin-left:0; margin-right:auto; border-collapse:collapse; table-layout:auto; text-align:left;">
-      <thead>
-        <tr id="table-header-row" style="text-align:left;"></tr>
-      </thead>
-      <tbody id="table-body" style="text-align:left;"></tbody>
-    </table>
-
-    <div id="table-message" class="loading" 
-         style="text-align:left; padding:4px 6px;">Select filters and click Refresh to view data</div>
-  </div>
-</section>
-
-
-  <!-- Alert Cards View -->
-  <section id="alert-view" class="content-section hidden">
-    <div class="placeholder">Alert Cards - Coming Soon</div>
-  </section>
-
-  <!-- Backtester View -->
-  <section id="backtester-view" class="content-section hidden">
-    <div class="placeholder">Backtester - Coming Soon</div>
+  <!-- Container for loading views -->
+  <section id="view-container" class="content-section" style="margin-top:20px;">
+    <!-- Content will be loaded here dynamically -->
   </section>
 </main>
 
-<script src="js/uifunctions.js"></script>
-<script src="js/controls.js"></script>
-<script src="js/main.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const viewContainer = document.getElementById('view-container');
+    const btnDb = document.getElementById('view-db-btn');
+    const btnAlerts = document.getElementById('view-alerts-btn');
+    const btnBacktester = document.getElementById('view-backtester-btn');
+
+    function clearActive() {
+      [btnDb, btnAlerts, btnBacktester].forEach(btn => {
+        btn.classList.remove('btn-active', 'glow-blue');
+      });
+    }
+
+    async function loadView(url, scripts = [], initFuncs = []) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    viewContainer.innerHTML = `<div class="error-message">Failed to load view: ${url}</div>`;
+    return;
+  }
+  const html = await response.text();
+  const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  if (bodyMatch) {
+    viewContainer.innerHTML = bodyMatch[1];
+  } else {
+    viewContainer.innerHTML = html;
+  }
+
+  // Remove previously added scripts to avoid duplicates
+  document.querySelectorAll('script.dynamic-script').forEach(s => s.remove());
+
+  // Load scripts dynamically and mark them so we can remove later
+  for (const src of scripts) {
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = src;
+      script.classList.add('dynamic-script');
+      script.onload = resolve;
+      script.onerror = reject;
+      document.body.appendChild(script);
+    });
+  }
+
+      // Call initialization functions if present
+      for (const funcName of initFuncs) {
+        if (typeof window[funcName] === 'function') {
+          window[funcName]();
+        }
+      }
+    }
+    // Initial load: DB view
+    loadView('dbview.html', ['js/uifunctions.js', 'js/controls.js', 'js/main.js'], ['initializeUI', 'initializeControls']);
+      btnDb.classList.add('btn-active', 'glow-blue');
+
+    btnDb.addEventListener('click', () => {
+      clearActive();
+      btnDb.classList.add('btn-active', 'glow-blue');
+      loadView('dbview.html', ['js/uifunctions.js', 'js/controls.js', 'js/main.js'], ['initializeUI', 'initializeControls']);
+    });
+
+    btnAlerts.addEventListener('click', () => {
+      clearActive();
+      btnAlerts.classList.add('btn-active', 'glow-blue');
+      loadView('cardsview.html', ['js/card-controls.js', 'js/card-poll.js'], ['initializeCardControls', 'alertPoll.initialize']);
+    });
+
+    btnBacktester.addEventListener('click', () => {
+      clearActive();
+      btnBacktester.classList.add('btn-active', 'glow-blue');
+      loadView('btview.html', ['js/uifunctions.js', 'js/controls.js', 'js/main.js'], ['initializeUI', 'initializeControls']);
+  });
+  });
+</script>
+
 </body>
 </html>
+

@@ -1,5 +1,6 @@
-// bt/tune15.js
-// 21 Nov 2025 - Optimized Standalone ComboAlgo Backtester v15
+// bt/tune2.js
+// 22 Nov 2025 - Optimized Standalone ComboAlgo Backtester v2
+// NEW: Aggregate vs Coupling mode toggle
 // Tests combination algos (algo1 AND algo2 AND algo3 AND algo4) against historical data
 // Outputs top performing combos by PF with trade stats
 // REQUIRES: npm install p-limit
@@ -13,9 +14,10 @@ const path = require('path');
 // ============================================================================
 
 const TradeSettings = {
-  minPF: .2,
+  minPF: 2,
+  aggregate: true,  // NEW: true = aggregate (mixed symbols), false = coupling (symbol-specific pairing)
   tradeDir: 'Long',  // 'Long', 'Short', 'Both'
-  tradeSymbol: { useAll: true, list: ['ETH', 'SOL', 'XRP'] },
+  tradeSymbol: { useAll: false, list: ['ETH', 'BTC', 'XRP'] },
   trade: {
     tradeWindow: 60,  // minutes
     posVal: 1000,     // position value in $
@@ -27,9 +29,9 @@ const TradeSettings = {
 };
 
 const ComboAlgos = {
-  algo1: 'MT; bin; rsi1_chg_1m; >; [20, 30,50]',
-  algo2: 'All; bin; v_chg_5m; >; [10, 20,40, 50]',
-  algo3: '',//'BTC; bin; [params]; >; [corePerc]',  // Optional - ALL must fire within algoWindow
+  algo1: 'MT; bin; rsi1_chg_1m; >; [30,50]',
+  algo2: 'All; bin; v_chg_5m; >; [20,40]',
+  algo3: '',  // Optional - ALL must fire within algoWindow
   algo4: ''   // Optional - ALL must fire within algoWindow
 };
 
@@ -344,13 +346,14 @@ async function simulateTrades(triggers, tradeSymbols, tpPerc, slPerc, tradeWindo
   };
 }
 
-function formatComboAlgo(algoComboArray, stats, tpPerc, slPerc, tradeSymbols, tradeDir) {
+function formatComboAlgo(algoComboArray, stats, tpPerc, slPerc, tradeSymbols, tradeDir, mode) {
+  const modeLabel = mode === 'aggregate' ? 'Aggregate' : 'Coupled';
   const symbols = Array.isArray(tradeSymbols) ? tradeSymbols.join(',') : tradeSymbols;
   const algoStrs = algoComboArray.map(a => 
     `${a.symbol}_${a.exchange}_${a.param}${a.operator}${a.value}`
   );
   const algoStr = algoStrs.join(' + ');
-  return `${symbols};${tradeDir};${algoStr}|TP${tpPerc}%|SL${slPerc}%|Tr${stats.count}|TO${Math.round(stats.timeoutRate)}%|NET$${Math.round(stats.netPnL)}|WR${Math.round(stats.winRate)}%|PF${stats.profitFactor.toFixed(2)}`;
+  return `[${modeLabel}]${symbols};${tradeDir};${algoStr}|TP${tpPerc}%|SL${slPerc}%|Tr${stats.count}|TO${Math.round(stats.timeoutRate)}%|NET$${Math.round(stats.netPnL)}|WR${Math.round(stats.winRate)}%|PF${stats.profitFactor.toFixed(2)}`;
 }
 
 async function writeJsonOutput(results, metadata) {
@@ -366,6 +369,8 @@ async function writeJsonOutput(results, metadata) {
     const output = {
       metadata,
       results: results.slice(0, Output.listAlgos).map(r => ({
+        mode: r.mode,
+        testSymbol: r.testSymbol || 'aggregate',
         algoCombo: r.combo.map(c => ({
           symbol: c.symbol,
           exchange: c.exchange,
@@ -382,7 +387,7 @@ async function writeJsonOutput(results, metadata) {
         },
         tpPercent: r.tp,
         slPercent: r.sl,
-        formattedString: formatComboAlgo(r.combo, r.stats, r.tp, r.sl, metadata.tradeSymbols, metadata.tradeDir)
+        formattedString: formatComboAlgo(r.combo, r.stats, r.tp, r.sl, r.testSymbol || metadata.tradeSymbols, metadata.tradeDir, r.mode)
       }))
     };
     
@@ -394,13 +399,33 @@ async function writeJsonOutput(results, metadata) {
 }
 
 // ============================================================================
+// NEW: Get minority symbols (intersection of all algo symbol lists)
+// ============================================================================
+function getMinoritySymbols(allAlgoResults) {
+  if (allAlgoResults.length === 0) return [];
+  
+  // Get unique symbols from each algo
+  const algoSymbolSets = allAlgoResults.map(algoSet => 
+    new Set(algoSet.map(r => r.combo.symbol))
+  );
+  
+  // Find intersection (minority rule)
+  let intersection = algoSymbolSets[0];
+  for (let i = 1; i < algoSymbolSets.length; i++) {
+    intersection = new Set([...intersection].filter(s => algoSymbolSets[i].has(s)));
+  }
+  
+  return Array.from(intersection).sort();
+}
+
+// ============================================================================
 // MAIN EXECUTION
 // ============================================================================
 
 async function runTune() {
   const startTime = Date.now();
-  console.log('\n🔥 Starting Tune Script');
-  console.log('══════════════════════════════════════════════════════════════════════');
+  console.log('\n🔥 Starting Tune Script v2');
+  console.log('═══════════════════════════════════════════════════════════════════════');
 
   // Collect algos
   const algoInputs = [];
@@ -416,10 +441,11 @@ async function runTune() {
     return;
   }
 
+  const mode = TradeSettings.aggregate ? 'AGGREGATE' : 'COUPLING';
   algoInputs.forEach(a => console.log(`Algo${a.num}: "${a.str}"`));
   const symbols = TradeSettings.tradeSymbol.useAll ? 'All' : TradeSettings.tradeSymbol.list.join(',');
-  console.log(`Trade Settings: minPF:${TradeSettings.minPF} | Dir:${TradeSettings.tradeDir} | Symbols:${symbols} | trW:${TradeSettings.trade.tradeWindow}min | minTr:${TradeSettings.minTrades} | maxTr:${TradeSettings.maxTrades} | algoW:${AlgoSettings.algoWindow}min`);
-  console.log('══════════════════════════════════════════════════════════════════════');
+  console.log(`Trade Settings: Mode:${mode} | minPF:${TradeSettings.minPF} | Dir:${TradeSettings.tradeDir} | Symbols:${symbols} | trW:${TradeSettings.trade.tradeWindow}min | minTr:${TradeSettings.minTrades} | maxTr:${TradeSettings.maxTrades} | algoW:${AlgoSettings.algoWindow}min`);
+  console.log('═══════════════════════════════════════════════════════════════════════');
 
   const endTs = Date.now();
   const startTs = endTs - (3 * 24 * 60 * 60 * 1000);
@@ -443,52 +469,147 @@ async function runTune() {
     allAlgoResults.push(results.map((ts, i) => ({ combo: combos[i], timestamps: ts })));
   }
 
-  // Generate all algo combinations
-  console.log(`\n🔗 STEP ${algoInputs.length + 1}: Cascading combos in algoWindow...`);
+  // ============================================================================
+  // CASCADE: AGGREGATE vs COUPLING MODE
+  // ============================================================================
+  
+  console.log(`\n🔗 STEP ${algoInputs.length + 1}: Cascading combos (${mode} MODE)...`);
   const stepStart = Date.now();
   const algoWindowMs = AlgoSettings.algoWindow * 60 * 1000;
-  
-  function cartesianProduct(arrays) {
-    if (arrays.length === 0) return [[]];
-    const [first, ...rest] = arrays;
-    const restProduct = cartesianProduct(rest);
-    const result = [];
-    for (const item of first) {
-      for (const combo of restProduct) {
-        result.push([item, ...combo]);
+
+  let validCombos;
+
+  if (TradeSettings.aggregate) {
+    // ========== AGGREGATE MODE ==========
+    console.log('   Using AGGREGATE mode - algos can fire on different symbols');
+    
+    function cartesianProduct(arrays) {
+      if (arrays.length === 0) return [[]];
+      const [first, ...rest] = arrays;
+      const restProduct = cartesianProduct(rest);
+      const result = [];
+      for (const item of first) {
+        for (const combo of restProduct) {
+          result.push([item, ...combo]);
+        }
       }
+      return result;
     }
-    return result;
+
+    const allCombinations = cartesianProduct(allAlgoResults);
+    console.log(`   Testing ${allCombinations.length} algo combinations (cross-symbol)...`);
+
+    const cascadeLimit = pLimit(SpeedConfig.cascadeParallel);
+    const cascadeResults = await Promise.all(
+      allCombinations.map(algoCombo => cascadeLimit(() => {
+        const timestamps = algoCombo.map(a => a.timestamps);
+        const triggers = cascadeAlgos(timestamps, algoWindowMs);
+        if (triggers.length > 0) {
+          return { algoCombos: algoCombo.map(a => a.combo), triggers, mode: 'aggregate' };
+        }
+        return null;
+      }))
+    );
+
+    const validCascade = cascadeResults.filter(r => r !== null);
+    console.log(`   ${validCascade.length} combos passed cascade (${Date.now() - stepStart}ms)`);
+
+    const failedMin = validCascade.filter(r => r.triggers.length < TradeSettings.minTrades).length;
+    const failedMax = validCascade.filter(r => r.triggers.length > TradeSettings.maxTrades).length;
+    console.log(`   ${failedMin} failed minTrades; ${failedMax} failed maxTrades`);
+
+    validCombos = validCascade.filter(r => 
+      r.triggers.length >= TradeSettings.minTrades && r.triggers.length <= TradeSettings.maxTrades
+    );
+    console.log(`   ${validCombos.length} combos ready for simulation`);
+
+  } else {
+    // ========== COUPLING MODE ==========
+    console.log('   Using COUPLING mode - each symbol tested independently');
+    
+    // Get minority symbols (intersection of all algos)
+    const minoritySymbols = getMinoritySymbols(allAlgoResults);
+    console.log(`   Minority rule applied: ${minoritySymbols.length} symbols [${minoritySymbols.join(', ')}]`);
+    
+    // Filter to minority or tradeSymbol list
+    let testSymbols = TradeSettings.tradeSymbol.useAll ? 
+      minoritySymbols : 
+      TradeSettings.tradeSymbol.list.filter(s => minoritySymbols.includes(s));
+    
+    if (testSymbols.length === 0) {
+      console.error('   ❌ No overlapping symbols between algos - cannot use coupling mode');
+      await dbManager.close();
+      return;
+    }
+
+    console.log(`   Testing ${testSymbols.length} symbols: [${testSymbols.join(', ')}]`);
+
+    const allSymbolResults = [];
+
+    for (const testSymbol of testSymbols) {
+      // Filter algo results to only this symbol
+      const symbolSpecificAlgos = allAlgoResults.map(algoResultSet => 
+        algoResultSet.filter(result => result.combo.symbol === testSymbol)
+      );
+      
+      // Skip if any algo has no data for this symbol
+      if (symbolSpecificAlgos.some(set => set.length === 0)) {
+        console.log(`      ⚠️  ${testSymbol}: Missing algo data, skipping`);
+        continue;
+      }
+      
+      // Generate combinations for this symbol only
+      function cartesianProduct(arrays) {
+        if (arrays.length === 0) return [[]];
+        const [first, ...rest] = arrays;
+        const restProduct = cartesianProduct(rest);
+        const result = [];
+        for (const item of first) {
+          for (const combo of restProduct) {
+            result.push([item, ...combo]);
+          }
+        }
+        return result;
+      }
+      
+      const symbolCombinations = cartesianProduct(symbolSpecificAlgos);
+      
+      // Cascade for this symbol
+      const cascadeLimit = pLimit(SpeedConfig.cascadeParallel);
+      const symbolCascadeResults = await Promise.all(
+        symbolCombinations.map(algoCombo => cascadeLimit(() => {
+          const timestamps = algoCombo.map(a => a.timestamps);
+          const triggers = cascadeAlgos(timestamps, algoWindowMs);
+          if (triggers.length > 0) {
+            return { 
+              testSymbol,
+              algoCombos: algoCombo.map(a => a.combo), 
+              triggers,
+              mode: 'coupled'
+            };
+          }
+          return null;
+        }))
+      );
+      
+      const validCascade = symbolCascadeResults.filter(r => r !== null);
+      const passedFilters = validCascade.filter(r => 
+        r.triggers.length >= TradeSettings.minTrades && 
+        r.triggers.length <= TradeSettings.maxTrades
+      );
+      
+      console.log(`      ${testSymbol}: ${passedFilters.length}/${symbolCombinations.length} combos passed`);
+      allSymbolResults.push(...passedFilters);
+    }
+
+    validCombos = allSymbolResults;
+    console.log(`   Total: ${validCombos.length} combos across all symbols (${Date.now() - stepStart}ms)`);
   }
 
-  const allCombinations = cartesianProduct(allAlgoResults);
-  console.log(`   Testing ${allCombinations.length} algo combinations...`);
-
-  const cascadeLimit = pLimit(SpeedConfig.cascadeParallel);
-  const cascadeResults = await Promise.all(
-    allCombinations.map(algoCombo => cascadeLimit(() => {
-      const timestamps = algoCombo.map(a => a.timestamps);
-      const triggers = cascadeAlgos(timestamps, algoWindowMs);
-      if (triggers.length > 0) {
-        return { algoCombos: algoCombo.map(a => a.combo), triggers };
-      }
-      return null;
-    }))
-  );
-
-  const validCascade = cascadeResults.filter(r => r !== null);
-  console.log(`   ${validCascade.length} combos passed cascade (${Date.now() - stepStart}ms)`);
-
-  const failedMin = validCascade.filter(r => r.triggers.length < TradeSettings.minTrades).length;
-  const failedMax = validCascade.filter(r => r.triggers.length > TradeSettings.maxTrades).length;
-  console.log(`   ${failedMin} failed minTrades; ${failedMax} failed maxTrades`);
-
-  const validCombos = validCascade.filter(r => 
-    r.triggers.length >= TradeSettings.minTrades && r.triggers.length <= TradeSettings.maxTrades
-  );
-  console.log(`   ${validCombos.length} combos ready for simulation`);
-
-  // Simulate trades with conservative-first optimization
+  // ============================================================================
+  // SIMULATE TRADES
+  // ============================================================================
+  
   console.log(`\n💰 STEP ${algoInputs.length + 2}: Simulating trades...`);
   const simStart = Date.now();
   const tradeSymbols = TradeSettings.tradeSymbol.useAll ? await getAllSymbolsExceptMT() : TradeSettings.tradeSymbol.list;
@@ -509,19 +630,31 @@ async function runTune() {
   for (const combo of validCombos) {
     let passedConservative = false;
     
+    // In coupling mode, only trade the specific symbol; in aggregate mode, trade all symbols
+    const tradeSymbolList = TradeSettings.aggregate ? 
+      tradeSymbols : 
+      [combo.testSymbol];
+    
     const comboResults = await Promise.all(
       tpSlPairs.map(({ tp, sl }) => simLimit(async () => {
         // Skip if conservative test failed and this isn't the first test
         if (!passedConservative && results.length > 0) return null;
         
         const stats = await simulateTrades(
-          combo.triggers, tradeSymbols, tp, sl,
+          combo.triggers, tradeSymbolList, tp, sl,
           tradeWindowMs, TradeSettings.tradeDir, TradeSettings.trade.posVal
         );
         
         if (stats && stats.profitFactor >= TradeSettings.minPF) {
           passedConservative = true;
-          return { combo: combo.algoCombos, stats, tp, sl };
+          return { 
+            combo: combo.algoCombos, 
+            testSymbol: combo.testSymbol, 
+            mode: combo.mode,
+            stats, 
+            tp, 
+            sl 
+          };
         }
         return null;
       }))
@@ -533,9 +666,12 @@ async function runTune() {
   console.log(`   ${validCombos.length * tpSlPairs.length - results.length} combos failed minPF`);
   console.log(`   ${results.length} combos passed minPF! (${Date.now() - simStart}ms)`);
 
-  // Output results
+  // ============================================================================
+  // OUTPUT RESULTS
+  // ============================================================================
+  
   console.log('\n📊 RESULTS:');
-  console.log('══════════════════════════════════════════════════════════════════════');
+  console.log('═══════════════════════════════════════════════════════════════════════');
 
   if (results.length === 0) {
     console.log('No combos passed all filters.');
@@ -550,13 +686,15 @@ async function runTune() {
     const topResults = results.slice(0, Output.topAlgos);
     
     topResults.forEach((r, i) => {
-      console.log(`${i + 1}. ${formatComboAlgo(r.combo, r.stats, r.tp, r.sl, symbols, TradeSettings.tradeDir)}`);
+      const displaySymbol = r.testSymbol || symbols;
+      console.log(`${i + 1}. ${formatComboAlgo(r.combo, r.stats, r.tp, r.sl, displaySymbol, TradeSettings.tradeDir, r.mode)}`);
     });
     
     // Write JSON output
     const metadata = {
       timestamp: new Date().toISOString(),
       runtimeMinutes: ((Date.now() - startTime) / 1000 / 60).toFixed(2),
+      mode: mode,
       settings: {
         minPF: TradeSettings.minPF,
         tradeDir: TradeSettings.tradeDir,
@@ -568,9 +706,9 @@ async function runTune() {
         algoWindow: AlgoSettings.algoWindow
       },
       algos: algoInputs.map(a => ({ num: a.num, definition: a.str })),
-      totalCombinationsTested: allCombinations.length,
+      totalCombinationsTested: validCombos.length * tpSlPairs.length,
       totalPassedFilters: results.length,
-      sortedBy: Output.sortByPF ? 'PF' : 'NET$'
+      sortedBy: Output.sortByPF ? 'PF' : 'NET'
     };
     
     await writeJsonOutput(results, metadata);

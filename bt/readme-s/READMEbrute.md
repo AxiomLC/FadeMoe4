@@ -1,4 +1,4 @@
-# brute15.js - Core Pattern Discovery Scanner
+21 Nov 25. # brute15.js - Core Pattern Discovery Scanner
 
 ## Overview
 Brute-force scanner that tests single-parameter conditions across all exchanges, timeframes, and thresholds to discover profitable trading patterns. Unlike tune15.js (which tests combinations of multiple algos), brute15 tests individual parameters exhaustively to find the best standalone signals.

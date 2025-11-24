@@ -152,13 +152,61 @@ LIMIT $${limitIndex} OFFSET $${offsetIndex}`;
     }
 });
 
+// Get latest perp_metrics data for requested symbols and exchanges
+app.get('/api/latest-metrics', async (req, res) => {
+    try {
+    const { symbols = '', exchanges = '' } = req.query;
+    const symbolList = symbols.split(',').map(s => s.trim().toUpperCase()).filter(s => s);
+    const exchangeList = exchanges.split(',').map(e => e.trim()).filter(e => e);
+
+    if (symbolList.length === 0 || exchangeList.length === 0) {
+      return res.status(400).json({ error: 'Symbols and exchanges query parameters are required' });
+    }
+
+    // Build WHERE clause
+    const values = [];
+    let whereClause = '';
+
+    if (symbolList.length > 0) {
+      const placeholders = symbolList.map((_, i) => `$${values.length + i + 1}`).join(', ');
+      whereClause += ` AND symbol IN (${placeholders})`;
+      values.push(...symbolList);
+    }
+
+    if (exchangeList.length > 0) {
+      const placeholders = exchangeList.map((_, i) => `$${values.length + i + 1}`).join(', ');
+      whereClause += ` AND exchange IN (${placeholders})`;
+      values.push(...exchangeList);
+    }
+
+    // Subquery to get latest ts per symbol/exchange
+    const query = `
+      SELECT pm.*
+      FROM perp_metrics pm
+      INNER JOIN (
+        SELECT symbol, exchange, MAX(ts) AS max_ts
+        FROM perp_metrics
+        WHERE 1=1 ${whereClause}
+        GROUP BY symbol, exchange
+      ) latest ON pm.symbol = latest.symbol AND pm.exchange = latest.exchange AND pm.ts = latest.max_ts
+      ORDER BY pm.symbol, pm.exchange
+    `;
+
+    const result = await dbManager.pool.query(query, values);
+    res.json({ data: result.rows });
+    } catch (error) {
+    console.error('Error fetching latest metrics:', error.message);
+    res.status(500).json({ error: 'Failed to fetch latest metrics' });
+    }
+});
+
 // System Summary Endpoint
 app.get('/api/system-summary', async (req, res) => {
     try {
         const latestStatusResult = await dbManager.pool.query(
             `SELECT script_name, status, message, ts FROM perp_status ORDER BY ts DESC LIMIT 10`
         );
-        
+
         const rows = latestStatusResult.rows || [];
         const runningScripts = rows.filter(r => r && r.status === 'running').map(r => r.script_name);
         const recentStatus = rows.slice(0, 5);
@@ -177,7 +225,7 @@ app.get('/api/system-summary', async (req, res) => {
         if (runningScripts && runningScripts.length > 0) {
             runningScripts.forEach(script => {
                 statusText += `<div style="padding-left: 15px; margin-top: 3px; color: #fbbf24; font-size: 14px;">• ${script}</div>`;
-            });
+});
         } else {
             statusText += `<div style="color: #d1d5db;">No scripts currently running.</div>`;
         }

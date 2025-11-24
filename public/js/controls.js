@@ -4,7 +4,7 @@
 // Handles multi-select dropdown toggles, refresh, pagination, and view toggles.
 // ============================================================================
 
-document.addEventListener('DOMContentLoaded', () => {
+function initializeControls() {
     // Ensure a single global state object
     if (!window.appState) {
         window.appState = {
@@ -132,4 +132,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         return selected;
     }
-});
+}
+
+window.initializeControls = initializeControls;

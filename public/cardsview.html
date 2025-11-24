@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FadeMoe4 Dashboard - Alert Cards</title>
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+<main>
+  <section id="alert-controls" class="controls" style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+    <button id="start-polling-btn" class="btn btn-normal btn-glow-red">Start</button>
+    <span id="polling-status" class="status-text" style="font-size: 0.9rem; color: #777; margin-left: 10px;">stopped</span>
+    <label for="delay-input" class="control-label" style="color: #d1d5db; font-weight: 600; margin-left: 20px;">1st Alert Delay (min):</label>
+    <input type="number" id="delay-input" class="page-input" min="1" max="100" value="5" style="width: 60px;" />
+    <label for="max-alerts-input" class="control-label" style="color: #d1d5db; font-weight: 600; margin-left: 20px;">Max Alerts:</label>
+    <input type="number" id="max-alerts-input" class="page-input" min="1" max="100" value="20" style="width: 60px;" />
+    <button id="wipe-btn" class="btn btn-small btn-glow-red" style="margin-left: 20px;">Wipe</button>
+    <button id="test-poll-btn" class="btn btn-small btn-glow-blue" style="margin-left: 10px;">Test</button>
+  </section>
+  <section id="combo-inputs-container" style="margin-top: 15px; display: flex; flex-direction: column; gap: 10px; min-width: 300px;">
+    <label class="control-label" style="color: #9f59ff; font-weight: 600;">Enter comboAlgo(s):</label>
+    <div class="combo-input-row" data-index="0" style="display: flex; align-items: center; gap: 10px;">
+      <span class="input-number" style="font-weight: bold; color: #b569ff;">#1</span>
+      <input type="text" class="combo-input" placeholder="e.g. All;Short;MT_bin_rsi1_chg_10m<30 + All_bin_v_chg_5m>20" style="flex: 1; padding: 8px; border-radius: 5px; border: 1px solid #5a4090; background: #382356; color: white;" />
+      <button class="add-btn btn btn-small" style="margin-left: 10px;">+</button>
+      <span class="error-msg" style="color: #f87171; font-size: 0.8rem; margin-left: 10px;"></span>
+    </div>
+  </section>
+  <section id="alert-grid" class="alert-grid" style="display: flex; flex-wrap: wrap; gap: 10px; padding: 20px; max-height: 80vh; overflow-y: auto; background: #1e1e2f; border-radius: 8px; margin-top: 20px;">
+    <div id="no-alerts-placeholder" class="loading" style="width: 100%; text-align: center; padding: 40px; color: #aaa;">No alerts yet. Start polling to monitor triggers.</div>
+  </section>
+</main>
+<script src="js/card-controls.js"></script>
+<script src="js/card-poll.js"></script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-# tune15.js - ComboAlgo Backtester
+21 Nov 25. # tune15.js - ComboAlgo Backtester
 
 ## Overview
 Backtests combinations of 2-4 trading algorithms against historical perpetual futures data. Tests all algo signals must fire within a time window (cascade), then simulates trades with multiple TP/SL configurations. Outputs top performers by Profit Factor or NET$ to console and JSON file.
