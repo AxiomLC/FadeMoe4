@@ -1,9 +1,8 @@
-// bt/tune2.js
-// 22 Nov 2025 - Optimized Standalone ComboAlgo Backtester v2
-// NEW: Aggregate vs Coupling mode toggle
-// Tests combination algos (algo1 AND algo2 AND algo3 AND algo4) against historical data
-// Outputs top performing combos by PF with trade stats
-// REQUIRES: npm install p-limit
+// bt/tune3.js
+// 24 Nov 2025 - Optimized Standalone ComboAlgo Backtester v3
+// Improved Aggregate vs Coupling mode toggle with separate algo1 and otherAlgos aggregate toggles
+// Simulates both Long and Short when tradeDir is 'Both', outputs best direction
+
 
 const dbManager = require('../db/dbsetup');
 const fs = require('fs').promises;
@@ -14,25 +13,26 @@ const path = require('path');
 // ============================================================================
 
 const TradeSettings = {
-  minPF: .2,
-  aggregate: true,  // NEW: true = aggregate (mixed symbols), false = coupling (symbol-specific pairing)
-  tradeDir: 'Both',  // 'Long', 'Short', 'Both'
+  minPF: 1,
+  algo1Aggregate: false,      // true = aggregate for algo1
+  otherAlgosAggregate: false, // true = aggregate for other algos
+  tradeDir: 'Both',          // 'Long', 'Short', 'Both'
   tradeSymbol: { useAll: true, list: ['ETH', 'BTC', 'XRP'] },
   trade: {
-    tradeWindow: 60,  // minutes
-    posVal: 1000,     // position value in $
-    tpPerc: [0.6, 1.3, 1.5],  // take profit %
-    slPerc: [0.3, 0.5, 0.8]   // stop loss %
+    tradeWindow: 60,         // minutes
+    posVal: 1000,            // position value in $
+    tpPerc: [0.6, 1.3, 1.5], // take profit %
+    slPerc: [0.3, 0.5, 0.8]  // stop loss %
   },
   minTrades: 90,
   maxTrades: 1200
 };
 
 const ComboAlgos = {
-  algo1: 'All; bin; rsi1_chg_10m;>;30',  // 'MT; bin; rsi1_chg_1m; >; [20, 30,50]'
-  algo2: 'All; bin; [params]; <>; [corePerc]',  // 'All; bin; v_chg_5m; >; [10, 20,40, 50]'
-  algo3: '',  // Optional - ALL must fire within algoWindow
-  algo4: ''   // Optional - ALL must fire within algoWindow
+  algo1: 'All; bin; rsi1_chg_10m;>;30',
+  algo2: 'All; bin; [params]; >; [corePerc]',
+  algo3: '',
+  algo4: ''
 };
 
 const AlgoSettings = {
@@ -45,7 +45,7 @@ const AlgoSettings = {
     'oi_chg_1m', 'oi_chg_5m', 'oi_chg_10m',
     'pfr_chg_1m', 'pfr_chg_5m', 'pfr_chg_10m',
     'lsr_chg_1m', 'lsr_chg_5m', 'lsr_chg_10m',
-    //'rsi1_chg_1m', 'rsi1_chg_5m', 'rsi1_chg_10m',
+    'rsi1_chg_1m', 'rsi1_chg_5m', 'rsi1_chg_10m',
     'rsi60_chg_1m', 'rsi60_chg_5m', 'rsi60_chg_10m',
     'tbv_chg_1m', 'tbv_chg_5m', 'tbv_chg_10m',
     'tsv_chg_1m', 'tsv_chg_5m', 'tsv_chg_10m',
@@ -58,7 +58,7 @@ const Output = {
   topAlgos: 15,
   listAlgos: 30,
   tradeTS: false,
-  sortByPF: false  // true = sort by PF, false = sort by NET$
+  sortByPF: true,  // true = sort by PF, false = sort by NET$
 };
 
 // ============================================================================
@@ -66,10 +66,10 @@ const Output = {
 // ============================================================================
 
 const SpeedConfig = {
-  fetchParallel: 8,       // Parallel algo fetches
-  cascadeParallel: 8,     // Parallel cascade operations
-  simulateParallel: 8,    // Parallel trade simulations
-  batchPriceFetch: true   // Fetch all symbol prices in single query (faster)
+  fetchParallel: 8,
+  cascadeParallel: 8,
+  simulateParallel: 8,
+  batchPriceFetch: true
 };
 
 // ============================================================================
@@ -167,13 +167,23 @@ async function fetchAlgoTimestamps(combo, startTs, endTs) {
   }
 }
 
+// Aggregate timestamps per algo (deduplicate by ts)
+function aggregateTimestamps(algoResults) {
+  const tsMap = new Map();
+  for (const result of algoResults) {
+    for (const tsEntry of result.timestamps) {
+      tsMap.set(Number(tsEntry.ts), tsEntry);
+    }
+  }
+  return Array.from(tsMap.values()).sort((a, b) => Number(a.ts) - Number(b.ts));
+}
+
 // Binary search cascade - ALL algos must fire within algoWindow
 function cascadeAlgos(algoTimestamps, algoWindowMs) {
   if (algoTimestamps.length < 2) return [];
 
   let current = algoTimestamps[0]; // Start with algo1
   
-  // Cascade through each subsequent algo
   for (let i = 1; i < algoTimestamps.length; i++) {
     const nextAlgo = algoTimestamps[i].sort((a, b) => Number(a.ts) - Number(b.ts));
     const matches = [];
@@ -182,7 +192,6 @@ function cascadeAlgos(algoTimestamps, algoWindowMs) {
       const windowStart = Number(t1.ts);
       const windowEnd = windowStart + algoWindowMs;
       
-      // Binary search for window start
       let left = 0, right = nextAlgo.length - 1;
       while (left <= right) {
         const mid = Math.floor((left + right) / 2);
@@ -190,7 +199,6 @@ function cascadeAlgos(algoTimestamps, algoWindowMs) {
         else right = mid - 1;
       }
 
-      // Check window range
       for (let j = left; j < nextAlgo.length && Number(nextAlgo[j].ts) <= windowEnd; j++) {
         if (Number(nextAlgo[j].ts) > windowStart) {
           matches.push({
@@ -213,18 +221,15 @@ function cascadeAlgos(algoTimestamps, algoWindowMs) {
 async function simulateTrades(triggers, tradeSymbols, tpPerc, slPerc, tradeWindowMs, tradeDir, posVal) {
   if (triggers.length === 0) return null;
 
-  // Group by symbol
   const triggersBySymbol = {};
   for (const t of triggers) {
     if (!triggersBySymbol[t.symbol]) triggersBySymbol[t.symbol] = [];
     triggersBySymbol[t.symbol].push(t);
   }
 
-  // Batch fetch prices for all symbols
   const priceCache = new Map();
   
   if (SpeedConfig.batchPriceFetch) {
-    // OPTIMIZED: Single query for all symbols
     const symbolList = Object.keys(triggersBySymbol).filter(s => 
       tradeSymbols.includes('All') || tradeSymbols.includes(s)
     );
@@ -241,7 +246,6 @@ async function simulateTrades(triggers, tradeSymbols, tpPerc, slPerc, tradeWindo
           [symbolList, minTs, maxTs]
         );
         
-        // Build cache
         for (const row of result.rows) {
           if (!priceCache.has(row.symbol)) {
             priceCache.set(row.symbol, { map: new Map(), sorted: [] });
@@ -255,7 +259,6 @@ async function simulateTrades(triggers, tradeSymbols, tpPerc, slPerc, tradeWindo
       }
     }
   } else {
-    // Original per-symbol fetch
     for (const symbol of Object.keys(triggersBySymbol)) {
       const symbolTriggers = triggersBySymbol[symbol];
       const minTs = Math.min(...symbolTriggers.map(t => Number(t.ts)));
@@ -281,7 +284,6 @@ async function simulateTrades(triggers, tradeSymbols, tpPerc, slPerc, tradeWindo
     }
   }
 
-  // Simulate trades
   const trades = [];
   let totalPnL = 0, wins = 0, timeouts = 0;
 
@@ -289,7 +291,7 @@ async function simulateTrades(triggers, tradeSymbols, tpPerc, slPerc, tradeWindo
     const priceData = priceCache.get(trigger.symbol);
     if (!priceData) continue;
 
-    const entry = priceData.map.get(Number(trigger.ts));
+    const entry = priceData.map.get(Number(trigger.tradeTS ?? trigger.ts));
     if (!entry) continue;
 
     const exitWindowEnd = Number(trigger.ts) + tradeWindowMs;
@@ -349,12 +351,14 @@ async function simulateTrades(triggers, tradeSymbols, tpPerc, slPerc, tradeWindo
 function formatComboAlgo(algoComboArray, stats, tpPerc, slPerc, tradeSymbols, tradeDir, mode) {
   const modeLabel = mode === 'aggregate' ? 'Aggregate' : 'Coupled';
   const symbols = Array.isArray(tradeSymbols) ? tradeSymbols.join(',') : tradeSymbols;
-  const algoStrs = algoComboArray.map(a => 
-    `${a.symbol}_${a.exchange}_${a.param}${a.operator}${a.value}`
-  );
+  const algoStrs = algoComboArray.map(a => {
+    const symbol = mode === 'aggregate' ? 'All' : a.symbol;
+    return `${symbol}_${a.exchange}_${a.param}${a.operator}${a.value}`;
+  });
   const algoStr = algoStrs.join(' + ');
   return `[${modeLabel}]${symbols};${tradeDir};${algoStr}|TP${tpPerc}%|SL${slPerc}%|Tr${stats.count}|TO${Math.round(stats.timeoutRate)}%|NET$${Math.round(stats.netPnL)}|WR${Math.round(stats.winRate)}%|PF${stats.profitFactor.toFixed(2)}`;
 }
+
 
 async function writeJsonOutput(results, metadata) {
   try {
@@ -441,7 +445,15 @@ async function runTune() {
     return;
   }
 
-  const mode = TradeSettings.aggregate ? 'AGGREGATE' : 'COUPLING';
+  // Validate aggregate mode toggles
+  if (!TradeSettings.algo1Aggregate && TradeSettings.otherAlgosAggregate) {
+    console.error('❌ Invalid config: algo1 cannot be coupled while other algos are aggregate');
+    await dbManager.close();
+    return;
+  }
+
+  const mode = TradeSettings.otherAlgosAggregate ? 'AGGREGATE' : 'COUPLING';
+
   algoInputs.forEach(a => console.log(`Algo${a.num}: "${a.str}"`));
   const symbols = TradeSettings.tradeSymbol.useAll ? 'All' : TradeSettings.tradeSymbol.list.join(',');
   console.log(`Trade Settings: Mode:${mode} | minPF:${TradeSettings.minPF} | Dir:${TradeSettings.tradeDir} | Symbols:${symbols} | trW:${TradeSettings.trade.tradeWindow}min | minTr:${TradeSettings.minTrades} | maxTr:${TradeSettings.maxTrades} | algoW:${AlgoSettings.algoWindow}min`);
@@ -470,16 +482,32 @@ async function runTune() {
   }
 
   // ============================================================================
-  // CASCADE: AGGREGATE vs COUPLING MODE
+  // AGGREGATE MODE: Merge timestamps per algo
   // ============================================================================
-  
+
+  if (TradeSettings.otherAlgosAggregate) {
+    for (let i = 0; i < allAlgoResults.length; i++) {
+      if (i === 0 && !TradeSettings.algo1Aggregate) continue; // Skip algo1 if coupled
+      allAlgoResults[i] = allAlgoResults[i].map(algoSet => {
+        return {
+          combo: algoSet.combo,
+          timestamps: aggregateTimestamps([algoSet])
+        };
+      });
+    }
+  }
+
+  // ============================================================================
+  // CASCADE
+  // ============================================================================
+
   console.log(`\n🔗 STEP ${algoInputs.length + 1}: Cascading combos (${mode} MODE)...`);
   const stepStart = Date.now();
   const algoWindowMs = AlgoSettings.algoWindow * 60 * 1000;
 
   let validCombos;
 
-  if (TradeSettings.aggregate) {
+  if (TradeSettings.otherAlgosAggregate) {
     // ========== AGGREGATE MODE ==========
     console.log('   Using AGGREGATE mode - algos can fire on different symbols');
     
@@ -631,7 +659,7 @@ async function runTune() {
     let passedConservative = false;
     
     // In coupling mode, only trade the specific symbol; in aggregate mode, trade all symbols
-    const tradeSymbolList = TradeSettings.aggregate ? 
+    const tradeSymbolList = TradeSettings.otherAlgosAggregate ? 
       tradeSymbols : 
       [combo.testSymbol];
     
@@ -640,20 +668,32 @@ async function runTune() {
         // Skip if conservative test failed and this isn't the first test
         if (!passedConservative && results.length > 0) return null;
         
-        const stats = await simulateTrades(
-          combo.triggers, tradeSymbolList, tp, sl,
-          tradeWindowMs, TradeSettings.tradeDir, TradeSettings.trade.posVal
-        );
-        
-        if (stats && stats.profitFactor >= TradeSettings.minPF) {
+        // Run simulation for Long and Short if tradeDir is Both
+        const directions = TradeSettings.tradeDir === 'Both' ? ['Long', 'Short'] : [TradeSettings.tradeDir];
+        let bestStats = null;
+        let bestDirection = null;
+
+        for (const dir of directions) {
+          const stats = await simulateTrades(
+            combo.triggers, tradeSymbolList, tp, sl,
+            tradeWindowMs, dir, TradeSettings.trade.posVal
+          );
+          if (stats && (!bestStats || stats.profitFactor > bestStats.profitFactor)) {
+            bestStats = stats;
+            bestDirection = dir;
+          }
+        }
+
+        if (bestStats && bestStats.profitFactor >= TradeSettings.minPF) {
           passedConservative = true;
-          return { 
-            combo: combo.algoCombos, 
-            testSymbol: combo.testSymbol, 
+          return {
+            combo: combo.algoCombos,
+            testSymbol: TradeSettings.otherAlgosAggregate ? 'All' : combo.testSymbol,
             mode: combo.mode,
-            stats, 
-            tp, 
-            sl 
+            stats: bestStats,
+            tp,
+            sl,
+            tradeDir: bestDirection
           };
         }
         return null;
@@ -676,7 +716,6 @@ async function runTune() {
   if (results.length === 0) {
     console.log('No combos passed all filters.');
   } else {
-    // Sort by user preference
     if (Output.sortByPF) {
       results.sort((a, b) => b.stats.profitFactor - a.stats.profitFactor);
     } else {
@@ -687,10 +726,9 @@ async function runTune() {
     
     topResults.forEach((r, i) => {
       const displaySymbol = r.testSymbol || symbols;
-      console.log(`${i + 1}. ${formatComboAlgo(r.combo, r.stats, r.tp, r.sl, displaySymbol, TradeSettings.tradeDir, r.mode)}`);
+      console.log(`${i + 1}. ${formatComboAlgo(r.combo, r.stats, r.tp, r.sl, displaySymbol, r.tradeDir, r.mode)}`);
     });
     
-    // Write JSON output
     const metadata = {
       timestamp: new Date().toISOString(),
       runtimeMinutes: ((Date.now() - startTime) / 1000 / 60).toFixed(2),

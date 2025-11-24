@@ -16,14 +16,14 @@ const CONFIG = {
 
   // Detection settings
   detection: {
-    minTrades: 100,  // Minimum trades to consider algo valid
+    minTrades: 200,  // Minimum trades to consider algo valid
     maxTrades: 1500, // Maximum trades to consider algo valid
-    minPF: 3       // Minimum profit factor threshold
+    minPF: 2       // Minimum profit factor threshold
   },
 
   // Trade execution settings
   tradeExecution: {
-    tradeWindow: 30, // Trade window in minutes
+    tradeWindow: 60, // Trade window in minutes
     posVal: 1000,    // Position value
     tpPerc: [1, 1.5, 1.9],
     slPerc: [0.2, 0.4, 0.6]
@@ -58,7 +58,7 @@ const CONFIG = {
 
   // Output settings
   output: {
-    topResults: 20,    // Console display count
+    topResults: 30,    // Console display count
     listResults: 40,   // JSON output count
     sortByPF: true     // true = sort by PF, false = sort by NET$
   },

@@ -13,8 +13,8 @@ const path = require('path');
 // ============================================================================
 
 const TradeSettings = {
-  minPF: .2,
-  tradeDir: 'Long',  // 'Long', 'Short', 'Both'
+  minPF: 1,
+  tradeDir: 'Short',  // 'Long', 'Short', 'Both'
   tradeSymbol: { useAll: true, list: ['ETH', 'SOL', 'XRP'] },
   trade: {
     tradeWindow: 60,  // minutes
@@ -27,8 +27,8 @@ const TradeSettings = {
 };
 
 const ComboAlgos = {
-  algo1: 'MT; bin; rsi1_chg_1m; >; [20, 30,50]',
-  algo2: 'All; bin; v_chg_5m; >; [10, 20,40, 50]',
+  algo1: 'BTC; bin; lsr_chg_10m;>;[0.9, 1.3, 1.5, 1.8]',  // 'MT; bin; rsi1_chg_1m; >; [20, 30,50]'
+  algo2: 'All; bin; [params]; <>; [corePerc]',  // 'All; bin; v_chg_5m; >; [10, 20,40, 50]'
   algo3: '',//'BTC; bin; [params]; >; [corePerc]',  // Optional - ALL must fire within algoWindow
   algo4: ''   // Optional - ALL must fire within algoWindow
 };
