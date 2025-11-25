@@ -25,8 +25,8 @@ const EXCHANGES = {
     perpspec: 'bin-ohlcv', // PERPSPEC: bin-ohlcv
     url: 'https://fapi.binance.com/fapi/v1/klines',
     limit: 800,
-    rateDelay: 300,
-    concurrency: 6,
+    rateDelay: 400,
+    concurrency: 4,
     timeout: 10000,
     apiInterval: '1m',
     mapSymbol: sym => `${sym}USDT`

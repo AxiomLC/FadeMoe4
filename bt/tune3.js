@@ -14,43 +14,43 @@ const path = require('path');
 
 const TradeSettings = {
   minPF: 1,
-  algo1Aggregate: false,      // true = aggregate for algo1
+  algo1Aggregate: true,      // false, true = aggregate for algo1
   otherAlgosAggregate: false, // true = aggregate for other algos
-  tradeDir: 'Both',          // 'Long', 'Short', 'Both'
+  tradeDir: 'Long',          // 'Long', 'Short', 'Both'
   tradeSymbol: { useAll: true, list: ['ETH', 'BTC', 'XRP'] },
   trade: {
-    tradeWindow: 60,         // minutes
+    tradeWindow: 80,         // minutes
     posVal: 1000,            // position value in $
-    tpPerc: [0.6, 1.3, 1.5], // take profit %
-    slPerc: [0.3, 0.5, 0.8]  // stop loss %
+    tpPerc: [ 1, 1.2,  1.3, 1.5], // take profit %
+    slPerc: [0.2, 0.3, 0.4]  // stop loss %
   },
-  minTrades: 90,
-  maxTrades: 1200
+  minTrades: 200,
+  maxTrades: 900
 };
 
 const ComboAlgos = {
-  algo1: 'All; bin; rsi1_chg_10m;>;30',
-  algo2: 'All; bin; [params]; >; [corePerc]',
-  algo3: '',
+  algo1: '[BTC,ETH]; bin; rsi1_chg_5m; >; 20', //   'All; bin; rsi1_chg_10m;>;30'
+  algo2: 'All; bin; [params]; <; [corePerc]',
+  algo3: '',  //'All; bin; [params]; <>; [corePerc]',
   algo4: ''
 };
 
 const AlgoSettings = {
-  algoWindow: 30,  // minutes - ALL algos must fire within this window
-  algoSymbol: { useAll: true, list: ['ETH', 'BTC'] },
-  corePerc: [0.2, 0.4, 0.7, 1.2, 5, 35, 100],
+  algoWindow: 160,  // minutes - ALL algos must fire within this window
+  algoSymbol: { useAll: false, list: ['ETH', 'BTC', 'LINK'] },
+  corePerc: [0.2, 0.5, 5, 15, 35, 60, 100],
   params: [
     //'c_chg_1m', 'c_chg_5m', 'c_chg_10m',
-    //'v_chg_1m', 'v_chg_5m', 'v_chg_10m',
+    'v_chg_1m', 'v_chg_5m', 'v_chg_10m',
     'oi_chg_1m', 'oi_chg_5m', 'oi_chg_10m',
     'pfr_chg_1m', 'pfr_chg_5m', 'pfr_chg_10m',
     'lsr_chg_1m', 'lsr_chg_5m', 'lsr_chg_10m',
     'rsi1_chg_1m', 'rsi1_chg_5m', 'rsi1_chg_10m',
-    'rsi60_chg_1m', 'rsi60_chg_5m', 'rsi60_chg_10m',
+    //'rsi60_chg_1m', 'rsi60_chg_5m', 'rsi60_chg_10m',
     'tbv_chg_1m', 'tbv_chg_5m', 'tbv_chg_10m',
     'tsv_chg_1m', 'tsv_chg_5m', 'tsv_chg_10m',
-    'lql_chg_1m', 'lql_chg_5m', 'lql_chg_10m',
-    'lqs_chg_1m', 'lqs_chg_5m', 'lqs_chg_10m'
+    //'lql_chg_1m', 'lql_chg_5m', 'lql_chg_10m',
+    //'lqs_chg_1m', 'lqs_chg_5m', 'lqs_chg_10m'
   ]
 };
 
@@ -348,15 +348,16 @@ async function simulateTrades(triggers, tradeSymbols, tpPerc, slPerc, tradeWindo
   };
 }
 
-function formatComboAlgo(algoComboArray, stats, tpPerc, slPerc, tradeSymbols, tradeDir, mode) {
-  const modeLabel = mode === 'aggregate' ? 'Aggregate' : 'Coupled';
-  const symbols = Array.isArray(tradeSymbols) ? tradeSymbols.join(',') : tradeSymbols;
+function formatComboAlgo(algoComboArray, stats, tpPerc, slPerc, tradeSymbols, algoSymbols, tradeDir, mode) {
+  const modeLabel = mode === 'aggregate' ? 'Aggr' : 'Coupled';
+  const tradeSymbolsStr = Array.isArray(tradeSymbols) ? tradeSymbols.join(',') : tradeSymbols;
+  const algoSymbolsStr = Array.isArray(algoSymbols) ? algoSymbols.join(',') : algoSymbols;
   const algoStrs = algoComboArray.map(a => {
-    const symbol = mode === 'aggregate' ? 'All' : a.symbol;
+    const symbol = mode === 'aggregate' ? algoSymbolsStr : a.symbol;
     return `${symbol}_${a.exchange}_${a.param}${a.operator}${a.value}`;
   });
   const algoStr = algoStrs.join(' + ');
-  return `[${modeLabel}]${symbols};${tradeDir};${algoStr}|TP${tpPerc}%|SL${slPerc}%|Tr${stats.count}|TO${Math.round(stats.timeoutRate)}%|NET$${Math.round(stats.netPnL)}|WR${Math.round(stats.winRate)}%|PF${stats.profitFactor.toFixed(2)}`;
+  return `[${modeLabel}]${tradeSymbolsStr};${tradeDir};${algoStr}|TP${tpPerc}%|SL${slPerc}%|Tr${stats.count}|TO${Math.round(stats.timeoutRate)}%|NET$${Math.round(stats.netPnL)}|WR${Math.round(stats.winRate)}%|PF${stats.profitFactor.toFixed(2)}`;
 }
 
 
@@ -405,15 +406,30 @@ async function writeJsonOutput(results, metadata) {
 // ============================================================================
 // NEW: Get minority symbols (intersection of all algo symbol lists)
 // ============================================================================
-function getMinoritySymbols(allAlgoResults) {
+function getMinoritySymbols(allAlgoResults, algoAggregateFlags) {
   if (allAlgoResults.length === 0) return [];
-  
-  // Get unique symbols from each algo
-  const algoSymbolSets = allAlgoResults.map(algoSet => 
-    new Set(algoSet.map(r => r.combo.symbol))
-  );
-  
-  // Find intersection (minority rule)
+
+  const algoSymbolSets = allAlgoResults.map((algoSet, i) => {
+    if (algoAggregateFlags[i]) {
+      // Aggregate algo: get symbols from aggregated timestamps
+      const symbols = new Set();
+      for (const result of algoSet) {
+        for (const tsEntry of result.timestamps) {
+          symbols.add(tsEntry.symbol);
+        }
+      }
+      return symbols;
+    } else {
+      // Coupled algo: get symbols from combos
+      return new Set(algoSet.map(r => r.combo.symbol));
+    }
+  });
+
+  console.log('Algo symbol sets:');
+  algoSymbolSets.forEach((set, idx) => {
+    console.log(`Algo ${idx + 1} (${algoAggregateFlags[idx] ? 'Aggregate' : 'Coupled'}):`, Array.from(set).join(', '));
+  });
+
   let intersection = algoSymbolSets[0];
   for (let i = 1; i < algoSymbolSets.length; i++) {
     intersection = new Set([...intersection].filter(s => algoSymbolSets[i].has(s)));
@@ -422,13 +438,19 @@ function getMinoritySymbols(allAlgoResults) {
   return Array.from(intersection).sort();
 }
 
+// ... existing code ...
+
+
+// ... existing code ...
+
+
 // ============================================================================
 // MAIN EXECUTION
 // ============================================================================
 
 async function runTune() {
   const startTime = Date.now();
-  console.log('\n🔥 Starting Tune Script v2');
+  console.log('\n🔥 Starting Tune Script v3');
   console.log('═══════════════════════════════════════════════════════════════════════');
 
   // Collect algos
@@ -445,6 +467,9 @@ async function runTune() {
     return;
   }
 
+  const algoAggregateFlags = algoInputs.map(a => a.num === 1 ? TradeSettings.algo1Aggregate : TradeSettings.otherAlgosAggregate);
+  const algo1SymbolRaw = ComboAlgos.algo1.split(';')[0].trim();
+  const algo1SymbolIsAllOrList = algo1SymbolRaw === 'All' || algo1SymbolRaw.startsWith('[');
   // Validate aggregate mode toggles
   if (!TradeSettings.algo1Aggregate && TradeSettings.otherAlgosAggregate) {
     console.error('❌ Invalid config: algo1 cannot be coupled while other algos are aggregate');
@@ -554,16 +579,35 @@ async function runTune() {
   } else {
     // ========== COUPLING MODE ==========
     console.log('   Using COUPLING mode - each symbol tested independently');
+  
+// Get minority symbols (intersection of all algos)
+const algoAggregateFlags = algoInputs.map(a => a.num === 1 ? TradeSettings.algo1Aggregate : TradeSettings.otherAlgosAggregate);
+const minoritySymbols = getMinoritySymbols(allAlgoResults, algoAggregateFlags);
+console.log(`   Minority rule applied: ${minoritySymbols.length} symbols [${minoritySymbols.join(', ')}]`);
+
+const hasAggregate = algoAggregateFlags.includes(true);
+const hasCoupled = algoAggregateFlags.includes(false);
+
+// Parse raw algo1 symbol input
+const algo1SymbolRaw = ComboAlgos.algo1.split(';')[0].trim();
+const algo1SymbolIsAllOrList = algo1SymbolRaw === 'All' || algo1SymbolRaw.startsWith('[');
+
+let testSymbols;
+if (hasAggregate && hasCoupled) {
+  // Mixed mode: allow all coupled symbols to cascade against aggregate timestamps
+  const coupledSymbolsSets = allAlgoResults
+    .map((algoSet, i) => !algoAggregateFlags[i] ? new Set(algoSet.map(r => r.combo.symbol)) : new Set())
+    .filter(s => s.size > 0);
+  const unionCoupledSymbols = new Set();
+  coupledSymbolsSets.forEach(s => s.forEach(sym => unionCoupledSymbols.add(sym)));
+  testSymbols = TradeSettings.tradeSymbol.useAll ? Array.from(unionCoupledSymbols) : TradeSettings.tradeSymbol.list.filter(s => unionCoupledSymbols.has(s));
+} else {
+  testSymbols = TradeSettings.tradeSymbol.useAll ? 
+    minoritySymbols : 
+    TradeSettings.tradeSymbol.list.filter(s => minoritySymbols.includes(s));
+}
     
-    // Get minority symbols (intersection of all algos)
-    const minoritySymbols = getMinoritySymbols(allAlgoResults);
-    console.log(`   Minority rule applied: ${minoritySymbols.length} symbols [${minoritySymbols.join(', ')}]`);
-    
-    // Filter to minority or tradeSymbol list
-    let testSymbols = TradeSettings.tradeSymbol.useAll ? 
-      minoritySymbols : 
-      TradeSettings.tradeSymbol.list.filter(s => minoritySymbols.includes(s));
-    
+    //==============================================
     if (testSymbols.length === 0) {
       console.error('   ❌ No overlapping symbols between algos - cannot use coupling mode');
       await dbManager.close();
@@ -576,9 +620,15 @@ async function runTune() {
 
     for (const testSymbol of testSymbols) {
       // Filter algo results to only this symbol
-      const symbolSpecificAlgos = allAlgoResults.map(algoResultSet => 
-        algoResultSet.filter(result => result.combo.symbol === testSymbol)
-      );
+      const symbolSpecificAlgos = allAlgoResults.map((algoResultSet, i) => {
+  if (algoAggregateFlags[i]) {
+    // Aggregate algo: use all results (no filtering)
+    return algoResultSet;
+  } else {
+    // Coupled algo: filter by symbol
+    return algoResultSet.filter(result => result.combo.symbol === testSymbol);
+  }
+});
       
       // Skip if any algo has no data for this symbol
       if (symbolSpecificAlgos.some(set => set.length === 0)) {
@@ -721,14 +771,39 @@ async function runTune() {
     } else {
       results.sort((a, b) => b.stats.netPnL - a.stats.netPnL);
     }
-    
+    //======================================
     const topResults = results.slice(0, Output.topAlgos);
-    
     topResults.forEach((r, i) => {
-      const displaySymbol = r.testSymbol || symbols;
-      console.log(`${i + 1}. ${formatComboAlgo(r.combo, r.stats, r.tp, r.sl, displaySymbol, r.tradeDir, r.mode)}`);
+    let tradeSymbolsForDisplay;
+    let algoSymbolsForDisplay = AlgoSettings.algoSymbol.useAll ? 'All' : AlgoSettings.algoSymbol.list;
+
+    if (r.mode === 'aggregate') {
+      tradeSymbolsForDisplay = TradeSettings.tradeSymbol.useAll ? 'All' : TradeSettings.tradeSymbol.list;
+    } else {
+    // Coupled mode
+    tradeSymbolsForDisplay = r.testSymbol || (TradeSettings.tradeSymbol.useAll ? 'All' : TradeSettings.tradeSymbol.list[0]);
+    const hasAggregate = algoAggregateFlags.includes(true);
+    const hasCoupled = algoAggregateFlags.includes(false);
+
+    if (hasAggregate && hasCoupled) {
+  // For aggregate algo combos, show algoSymbols list only if user input was 'All' or list
+  if (r.mode === 'coupled') {
+    r.combo = r.combo.map(c => {
+      if (algoAggregateFlags[0] && c.symbol === algo1SymbolRaw && algo1SymbolIsAllOrList) {
+        return {
+          ...c,
+          symbol: Array.isArray(algoSymbolsForDisplay) ? algoSymbolsForDisplay.join(',') : algoSymbolsForDisplay
+        };
+      }
+      return c;
     });
-    
+  }
+}
+  }
+
+  console.log(`${i + 1}. ${formatComboAlgo(r.combo, r.stats, r.tp, r.sl, tradeSymbolsForDisplay, algoSymbolsForDisplay, r.tradeDir, r.mode)}`);
+});
+  //=======================================
     const metadata = {
       timestamp: new Date().toISOString(),
       runtimeMinutes: ((Date.now() - startTime) / 1000 / 60).toFixed(2),

@@ -59,8 +59,8 @@ const EXCHANGES = {
 const totalSymbols = perpList.length;
 const PERPSPECS = Object.values(EXCHANGES).map(c => c.perpspec).join(', ');
 const API_URL = 'https://api.coinalyze.net/v1/liquidation-history';
-const RATE_DELAY = 200;  // ms delay between requests to avoid rate limits
-const CONCURRENCY = 5;  // Parallel fetches per symbol (across exchanges)
+const RATE_DELAY = 500;  // ms delay between requests to avoid rate limits
+const CONCURRENCY = 1;  // 3, 6  Parallel fetches per symbol (across exchanges)
 
 // ============================================================================
 // FETCH FUNCTION (Unified for Coinalyze API)

@@ -12,5 +12,7 @@ bt/brute/
 bt/tune/
 backtester/
 bt/archive/
+public/components/archive
+postgresql-new.conf.txt
 
 

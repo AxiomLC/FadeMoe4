@@ -12,7 +12,7 @@ const pLimit = require('p-limit');
 // ============================================================================
 const CONFIG = {
   // Core percent thresholds to test (positive and negative)
-  corePercent: [.5, 1.5, 2.5, 5, 10, 30, 60, 100],
+  corePercent: [.1, 0.2, 0.5, 1.5, 2.5, 5, 10, 30, 60, ,80, 100, 120, 150, 200],
 
   // Detection settings
   detection: {
@@ -25,14 +25,14 @@ const CONFIG = {
   tradeExecution: {
     tradeWindow: 60, // Trade window in minutes
     posVal: 1000,    // Position value
-    tpPerc: [1, 1.5, 1.9],
-    slPerc: [0.2, 0.4, 0.6]
+    tpPerc: [0.8, 1, 1.5, 1.7, 1.9, 2.1],
+    slPerc: [0.4, 0.6, 0.8, 1]
   },
 
   // Target symbols
   targetSymbols: {
     useAll: true, // Use all symbols from perp_metrics (excludes MT)
-    list: ['ETH', 'SOL', 'DOGE', 'XRP'] // If useAll false, use this list
+    list: ['ETH', 'SOL', 'XRP'] // If useAll false, use this list
   },
 
   // Expanded params list
@@ -43,11 +43,11 @@ const CONFIG = {
     'pfr_chg_1m', 'pfr_chg_5m', 'pfr_chg_10m',
     'lsr_chg_1m', 'lsr_chg_5m', 'lsr_chg_10m',
     //'rsi1_chg_1m', 'rsi1_chg_5m', 'rsi1_chg_10m',
-    'rsi60_chg_1m', 'rsi60_chg_5m', 'rsi60_chg_10m',
-    'tbv_chg_1m', 'tbv_chg_5m', 'tbv_chg_10m',
-    'tsv_chg_1m', 'tsv_chg_5m', 'tsv_chg_10m',
-    'lql_chg_1m', 'lql_chg_5m', 'lql_chg_10m',
-    'lqs_chg_1m', 'lqs_chg_5m', 'lqs_chg_10m'
+    //'rsi60_chg_1m', 'rsi60_chg_5m', 'rsi60_chg_10m',
+    //'tbv_chg_1m', 'tbv_chg_5m', 'tbv_chg_10m',
+    //'tsv_chg_1m', 'tsv_chg_5m', 'tsv_chg_10m',
+    //'lql_chg_1m', 'lql_chg_5m', 'lql_chg_10m',
+    //'lqs_chg_1m', 'lqs_chg_5m', 'lqs_chg_10m'
   ],
 
   // Exchanges to test
@@ -183,10 +183,11 @@ const CONFIG = {
     console.log('✅ BRUTE COMPLETE');
     console.log('='.repeat(70));
     console.log(output.summary.overview);
-    console.log(`\n🏆 TOP 15 BY ${CONFIG.output.sortByPF ? 'PROFIT FACTOR' : 'NET$'}:`);
+    console.log(`\n🏆 TOP BY ${CONFIG.output.sortByPF ? 'PROFIT FACTOR' : 'NET$'}:`);
     if (output.summary.topResults && output.summary.topResults.length > 0) {
-      output.summary.topResults.slice(0, 15).forEach((algo, i) => {
-        console.log(`${i + 1}. ${algo.algo}|TP${algo.tp}%|SL${algo.sl}%|PF${algo.pf}|WR${algo.wr}%|NET$${algo.netPnl}|TO${algo.timeoutRate}%|Tr${algo.trades}`);
+      output.summary.topResults.slice(0, CONFIG.output.topResults).forEach((algo, i) => {
+        // console.log(`${i + 1}. ${algo.algo}|TP${algo.tp}%|SL${algo.sl}%|PF${algo.pf}|WR${algo.wr}%|NET$${algo.netPnl}|TO${algo.timeoutRate}%|Tr${algo.trades}`);
+    console.log(`${i + 1}. ${algo.algo}|TP${algo.tp}%|SL${algo.sl}|TO${algo.timeoutRate}%|Tr${algo.trades}|NET$${algo.netPnl}|%WR${algo.wr}%|PF${algo.pf}`);
       });
     } else {
       console.log('No profitable patterns found to display.');
@@ -197,7 +198,7 @@ const CONFIG = {
   } catch (error) {
     console.error('❌ BRUTE failed:', error.message);
     console.error(error.stack);
-    await dbManager.logError('brute15', 'SCAN', 'EXEC_FAIL', error.message);
+    await dbManager.logError('brute', 'SCAN', 'EXEC_FAIL', error.message);
   } finally {
     await dbManager.close();
   }
@@ -502,7 +503,7 @@ function generateOutput(topResults, allResults, startTime, totalCandidates) {
     ? [...topResults].sort((a, b) => b.pf - a.pf)
     : [...topResults].sort((a, b) => b.netPnl - a.netPnl);
 
-  const topForSummary = sortedForDisplay.slice(0, 15).map(r => ({
+  const topForSummary = sortedForDisplay.slice(0, CONFIG.output.topResults).map(r => ({
     algo: formatAlgo(r),
     tp: r.tp,
     sl: r.sl,
@@ -518,7 +519,7 @@ function generateOutput(topResults, allResults, startTime, totalCandidates) {
 
   return {
     metadata: {
-      script: 'brute15.js',
+      script: 'brute.js',
       timestamp: new Date().toISOString(),
       runtime: `${runtime} minutes`,
       config: {
@@ -572,8 +573,22 @@ function generateOutput(topResults, allResults, startTime, totalCandidates) {
 
 // Format algo string for output
 function formatAlgo(result) {
-  const symbols = CONFIG.targetSymbols.useAll ? 'ALL' : CONFIG.targetSymbols.list.join(',');
-  return `${symbols};${result.direction};${result.exchange}_${result.param}${result.operator}${result.threshold}`;
+  //  const symbols = CONFIG.targetSymbols.useAll ? 'ALL' : CONFIG.targetSymbols.list.join(',');
+  //  return `${symbols};${result.direction};${result.exchange}_${result.param}${result.operator}${result.threshold}`;}
+// NEW CODE BELOW 25 Nov --->
+let symbolPart;
+  if (CONFIG.targetSymbols.useAll) {
+    symbolPart = 'All';
+  } else if (Array.isArray(CONFIG.targetSymbols.list)) {
+    if (CONFIG.targetSymbols.list.length === 1) {
+      symbolPart = CONFIG.targetSymbols.list[0];
+    } else {
+      symbolPart = `[${CONFIG.targetSymbols.list.join(',')}]`;
+    }
+  } else {
+    symbolPart = 'All';
+  }
+  return `${result.direction}-${symbolPart};${result.exchange}; ${result.param};${result.operator};${Math.abs(result.threshold)}`;
 }
 
 // ============================================================================
