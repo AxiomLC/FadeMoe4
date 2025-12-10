@@ -1,0 +1,178 @@
+# .voidrules - AI Assistant Guidelines for FadeMoe4 Workspace
+# Created: December 10, 2025 
+# Location: Workspace root (C:\Users\q1fre\FadeMoe4\.voidrules)
+
+## 🎯 CORE USER RULES (FROM SYSTEM CONTEXT)
+# ----------------------------------------------------------------------
+#1 MAJOR REVISIONS:
+Major revisions of files should include name, version/date, short sentence as to new edit.
+All as comment at very top. 
+Example: '# back/api_utils.py. rev:1Dec 2025 ver:2; wrapped log_status and log_error in async.to_thread.'
+
+#2 SMALL ONE-LINE EDITS:
+Small one line edits applied by posting snippet for User to copy/paste. 
+And await if User instructs you to make the edit directly.
+
+#3 CHAT MEMORY ALERT:
+If memory fade is occurring from the early chat history, alert User that some chat data retention from early is being lost.
+
+## ⚙️ TOOLS WORKFLOW & BEST PRACTICES
+# ----------------------------------------------------------------------
+### CRITICAL TOOL SEQUENCE:
+[ls_dir] → [read_file] → [edit_file/create_file_or_folder] → [verify]
+
+### ESSENTIAL RULES FOR EDIT_FILE:
+1. **ALWAYS READ FIRST**: Use `read_file` before editing to get exact current content
+2. **EXACT MATCH**: SEARCH block must match original code EXACTLY (including whitespace)
+3. **MINIMAL BUT UNIQUE**: SEARCH text must be large enough to uniquely identify change zone
+4. **DISJOINT CONTENTS**: Each SEARCH block must not overlap with others
+5. **SMALL CHANGES**: For small exact changes, prefer single find-and-replace approach
+
+### COMMON EDIT_FILE FAILURES & SOLUTIONS:
+FAIL: "ORIGINAL must EXACTLY match lines of code in the file"
+SOLUTION: Copy exact lines from read_file output; verify no trailing spaces/special chars
+
+FAIL: "ORIGINAL text must be DISJOINT from all other ORIGINAL text"
+SOLUTION: Ensure SEARCH blocks don't overlap or share content
+
+### PATH FORMATTING:
+- Windows paths: C:\Users\q1fre\FadeMoe4\file.js
+- Relative paths from workspace are accepted
+- Forward slashes also work: C:/Users/q1fre/FadeMoe4/file.js
+
+## 🔧 TOOL REFERENCE GUIDE
+# ----------------------------------------------------------------------
+### CRITICAL TOOLS:
+- `read_file` - MUST use before editing any file
+- `ls_dir` - Requires URI parameter (cannot be empty)
+- `edit_file` - Uses SEARCH/REPLACE blocks in single string
+- `create_file_or_folder` - Add trailing slash for folders
+- `rewrite_file` - Complete file overwrite (use for new files)
+
+### CONTENT SEARCH TOOLS:
+- `search_pathnames_only` - Find files by name pattern
+- `search_for_files` - Search file contents (slow)
+- `search_in_file` - Find text within specific file
+
+### EXECUTION TOOLS:
+- `run_command` - Terminal commands (8s timeout)
+- `open_persistent_terminal` - Long-running processes
+- `kill_persistent_terminal` - Stop persistent terminals
+
+### DIRECTORY EXPLORATION:
+- `get_dir_tree` - Recursive directory tree view
+- `ls_dir` - Simple directory listing
+- `read_lint_errors` - View code errors
+
+## 📋 CODE EDITING PROTOCOL (COMBINED FROM CONTINUE RULES)
+# ----------------------------------------------------------------------
+### SNIPPET FORMAT:
+When suggesting code edits, always provide concise snippets with:
+- 2-3 lines of existing code above and below changes
+- Inline comments: // NEW:, // UPDATED:, or // REMOVED:
+- Use // ... existing code ... for large unmodified sections
+- Avoid full file outputs unless explicitly requested
+- Focus on minimal, reversible changes
+
+### LARGE EDITS (>20 LINES OR MULTIPLE SECTIONS):
+1. First propose/describe changes in summary
+2. Offer to issue full updated file via tools
+3. Await explicit user approval ('yes' or 'proceed')
+4. If edit fails due to size/limits, fallback to create_new_file
+
+### EXACT TEXT CHANGES:
+For small exact text changes (single line/few words):
+- Prefer single find-and-replace tool approach
+- Ensures precise, reliable updates
+- Edit tool only for larger or structural changes
+
+## 🏗️ WORKSPACE ARCHITECTURE OVERVIEW
+# ----------------------------------------------------------------------
+FadeMoe4/ - Main workspace directory
+├── apis/ - API scripts (RSI, OHLCV, etc.)
+├── bt/ - Backtesting system (tune3.js main algorithm)
+├── db/ - Database setup and metrics
+├── public/ - Web UI components
+└── save/ - Backup/archive scripts
+
+### KEY PROJECT FILES:
+- `bt/tune3.js` - Main backtesting algorithm (incomplete at ~500 lines)
+- `apis/1z-bin-rsi-h.js` - RSI calculation from binance OHLCV
+- `server.js` - Main express server
+- `db/dbsetup.js` - Database manager
+- `api-utils.js` - Shared utility functions
+
+### DATABASE SYSTEM:
+- PostgreSQL with perp_data table
+- Metrics columns: oi, ls, pfr, rsi1, rsi60
+- Exchange field: 'bin', 'okx', 'web3'
+- Perpspec array: ['bin-rsi'], ['bin-ohlcv'], etc.
+
+## ⚠️ CRITICAL WARNINGS & EDGE CASES
+# ----------------------------------------------------------------------
+### MEMORY FADE:
+Alert user immediately if early chat context appears lost or if system message rules aren't being followed.
+
+### FILE STATE VERIFICATION:
+Edits that fail often result from outdated file state. Always:
+1. Run `read_file` to get latest version
+2. Compare with intended SEARCH block
+3. Verify timestamp/mtime if suspicious
+
+### WORKFLOW VERIFICATION SEQUENCE:
+```
+Need to edit? → read_file → copy exact → edit_file → read_file (verify)
+Need to find? → ls_dir → search_pathnames → read_file
+Need exec? → run_command → verify output
+```
+
+### PROJECT-SPECIFIC PATTERNS:
+- RSI scripts: Verify `ts` column population across all symbols
+- Backtester: Check `openTrades` vs `closedTrades` state machine
+- Database: `perp_data.exchange` must be verified before queries
+- API scripts: Batch processing with CHUNK_SIZE for DB load management
+
+## 🔍 ERROR DIAGNOSIS CHECKLIST
+# ----------------------------------------------------------------------
+When tools fail or produce unexpected results:
+1. Verify path exists with `ls_dir`
+2. Check file permissions/content with `read_file`
+3. Confirm SEARCH block has exact match
+4. Test with simpler edit first
+5. Check if file is too large (>1000 lines may have issues)
+6. Verify no special characters in SEARCH text
+7. Ensure SEARCH blocks don't overlap
+
+## 📝 APPENDIX: CONTINUE.DEV INHERITANCE
+# ----------------------------------------------------------------------
+This workspace contains .continue/rules/ directory with:
+- code-edit-protocol.md - Large edit safety & user consent
+- code-snippet-format.md - Concise snippet guidance  
+- prefer-single-find-and-replace... - Tool preference rules
+
+These rules inform but don't override .voidrules. When in conflict, follow .voidrules first, Continue rules second.
+
+## 🧠 EFFICIENT TOKEN & MEMORY MANAGEMENT
+# ----------------------------------------------------------------------
+### SINGLE READ FOR MAJOR EDITS:
+For major file edits (>50 lines or structural changes):
+1. **Read Once**: Use `read_file` on the ENTIRE file
+2. **Cache**: Keep the exact content for the duration of the task
+3. **Verify**: Compare cached vs current before final edit
+4. **Single Edit**: Apply all needed changes in one edit_file call
+
+### TOKEN CONSERVATION RULES:
+1. *Less is More*: Read only what you need for immediate edit
+2. *Batch Reads*: If you need multiple edits, batch them into single read
+3. *Verify Sparingly*: Verify only critical sections, not entire cascade
+4. *Fail Gracefully*: If token memory fades, confess and reset approach
+
+### MEMORY FADE RECOVERY:
+If dealing with memory loss during complex edits:
+1. Alert: "Token memory fading, requesting re-read of file"
+2. Reset: Obtain fresh read_file output
+3. Continue: Resume from cached version
+
+# END of .voidrules
+# Version: 1.1 | Last Updated: 10 Dec 2025
+# Updates: Added efficient token/memory management rules

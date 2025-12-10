@@ -10,9 +10,9 @@ package-lock.json
 jsconfig.json
 bt/brute/
 bt/tune/
-backtester/
+/backtester/
 bt/archive/
 public/components/archive
 postgresql-new.conf.txt
-
-
+*.log
+test*

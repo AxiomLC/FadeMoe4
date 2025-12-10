@@ -45,10 +45,10 @@ const PROXY_CONFIG = {
   username: '14a233d28dd8f',
   password: 'bf64d81ae2',
   host: '206.53.49.228',
-  port: 12323
+  port: 12324 // or 12323
 };
-
-const proxyUrl = `http://${PROXY_CONFIG.username}:${PROXY_CONFIG.password}@${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`;
+// or `http://
+const proxyUrl = `socks5://${PROXY_CONFIG.username}:${PROXY_CONFIG.password}@${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`;
 const proxyAgent = new HttpsProxyAgent(proxyUrl);
 
 // console.log(`${STATUS_COLOR}okx-pfr Proxy configured: ${PROXY_CONFIG.host}:${PROXY_CONFIG.port}${RESET}`);

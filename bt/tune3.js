@@ -2,7 +2,7 @@
 // 24 Nov 2025 - Optimized Standalone ComboAlgo Backtester v3
 // Improved Aggregate vs Coupling mode toggle with separate algo1 and otherAlgos aggregate toggles
 // Simulates both Long and Short when tradeDir is 'Both', outputs best direction
-
+// 10 Dec added line 508
 
 const dbManager = require('../db/dbsetup');
 const fs = require('fs').promises;
@@ -14,38 +14,38 @@ const path = require('path');
 
 const TradeSettings = {
   minPF: 1,
-  algo1Aggregate: true,      // false, true = aggregate for algo1
-  otherAlgosAggregate: false, // true = aggregate for other algos
+  algo1Aggregate: true,      // false, true = coupled/ aggregate for algo1
+  otherAlgosAggregate: true, // true = coupled / aggregate for other algos
   tradeDir: 'Long',          // 'Long', 'Short', 'Both'
   tradeSymbol: { useAll: true, list: ['ETH', 'BTC', 'XRP'] },
   trade: {
-    tradeWindow: 80,         // minutes
+    tradeWindow: 40,         // minutes
     posVal: 1000,            // position value in $
-    tpPerc: [ 1, 1.2,  1.3, 1.5], // take profit %
-    slPerc: [0.2, 0.3, 0.4]  // stop loss %
+    tpPerc: [ 1.2, 1.5, 1.8, 2], // take profit %
+    slPerc: [ 0.4, 0.6, 0.9]  // stop loss %
   },
-  minTrades: 200,
+  minTrades: 100,
   maxTrades: 900
 };
 
 const ComboAlgos = {
-  algo1: '[BTC,ETH]; bin; rsi1_chg_5m; >; 20', //   'All; bin; rsi1_chg_10m;>;30'
-  algo2: 'All; bin; [params]; <; [corePerc]',
-  algo3: '',  //'All; bin; [params]; <>; [corePerc]',
+  algo1: 'MT; bin; rsi1_chg_5m; >; [20,30,40]', //Short-All;bin; oi_chg_10m;<;1.5   'All; bin; rsi1_chg_10m;>;30'
+  algo2: 'All; bin; [params]; >; [corePerc]',
+  algo3: "",// 'All; bin; v_chg_5m; >; [35, 50]',  //'All; bin; [params]; <>; [corePerc]',
   algo4: ''
 };
 
 const AlgoSettings = {
-  algoWindow: 160,  // minutes - ALL algos must fire within this window
-  algoSymbol: { useAll: false, list: ['ETH', 'BTC', 'LINK'] },
-  corePerc: [0.2, 0.5, 5, 15, 35, 60, 100],
+  algoWindow: 90,  // minutes - ALL algos must fire within this window
+  algoSymbol: { useAll: true, list: ['ETH', 'BTC', 'LINK'] },
+  corePerc: [0.2, 0.5, 1.2, 2.4, 5, 15, 35, 60, 100],
   params: [
     //'c_chg_1m', 'c_chg_5m', 'c_chg_10m',
     'v_chg_1m', 'v_chg_5m', 'v_chg_10m',
     'oi_chg_1m', 'oi_chg_5m', 'oi_chg_10m',
     'pfr_chg_1m', 'pfr_chg_5m', 'pfr_chg_10m',
     'lsr_chg_1m', 'lsr_chg_5m', 'lsr_chg_10m',
-    'rsi1_chg_1m', 'rsi1_chg_5m', 'rsi1_chg_10m',
+    //'rsi1_chg_1m', 'rsi1_chg_5m', 'rsi1_chg_10m',
     //'rsi60_chg_1m', 'rsi60_chg_5m', 'rsi60_chg_10m',
     'tbv_chg_1m', 'tbv_chg_5m', 'tbv_chg_10m',
     'tsv_chg_1m', 'tsv_chg_5m', 'tsv_chg_10m',
@@ -348,12 +348,16 @@ async function simulateTrades(triggers, tradeSymbols, tpPerc, slPerc, tradeWindo
   };
 }
 
-function formatComboAlgo(algoComboArray, stats, tpPerc, slPerc, tradeSymbols, algoSymbols, tradeDir, mode) {
+function formatComboAlgo(algoComboArray, stats, tpPerc, slPerc, tradeSymbols, algoSymbols, tradeDir, mode, originalAlgoSymbols) {
   const modeLabel = mode === 'aggregate' ? 'Aggr' : 'Coupled';
   const tradeSymbolsStr = Array.isArray(tradeSymbols) ? tradeSymbols.join(',') : tradeSymbols;
   const algoSymbolsStr = Array.isArray(algoSymbols) ? algoSymbols.join(',') : algoSymbols;
-  const algoStrs = algoComboArray.map(a => {
-    const symbol = mode === 'aggregate' ? algoSymbolsStr : a.symbol;
+  const algoStrs = algoComboArray.map((a, idx) => {
+    // Use original symbol from algo definition if not 'All'
+    let symbol = a.symbol;
+    if (mode === 'aggregate' && originalAlgoSymbols && originalAlgoSymbols[idx] !== 'All') {
+      symbol = originalAlgoSymbols[idx];
+    }
     return `${symbol}_${a.exchange}_${a.param}${a.operator}${a.value}`;
   });
   const algoStr = algoStrs.join(' + ');
@@ -505,6 +509,11 @@ async function runTune() {
     
     allAlgoResults.push(results.map((ts, i) => ({ combo: combos[i], timestamps: ts })));
   }
+    // Store original algo symbols before aggregation
+    const originalAlgoSymbols = algoInputs.map(algo => {
+      const symbolPart = algo.str.split(';')[0].trim();
+      return symbolPart; // Returns 'BTC', 'All', '[ETH,BTC]', etc.
+    });
 
   // ============================================================================
   // AGGREGATE MODE: Merge timestamps per algo
@@ -589,8 +598,8 @@ const hasAggregate = algoAggregateFlags.includes(true);
 const hasCoupled = algoAggregateFlags.includes(false);
 
 // Parse raw algo1 symbol input
-const algo1SymbolRaw = ComboAlgos.algo1.split(';')[0].trim();
-const algo1SymbolIsAllOrList = algo1SymbolRaw === 'All' || algo1SymbolRaw.startsWith('[');
+// const algo1SymbolRaw = already declared in aggreg section.  ComboAlgos.algo1.split(';')[0].trim();
+// const algo1SymbolIsAllOrList already const in aggeg section line 476 = algo1SymbolRaw === 'All' || algo1SymbolRaw.startsWith('[');
 
 let testSymbols;
 if (hasAggregate && hasCoupled) {
@@ -779,6 +788,16 @@ if (hasAggregate && hasCoupled) {
 
     if (r.mode === 'aggregate') {
       tradeSymbolsForDisplay = TradeSettings.tradeSymbol.useAll ? 'All' : TradeSettings.tradeSymbol.list;
+      
+      // Fix aggregate mode to use original symbols
+      r.combo = r.combo.map((c, idx) => {
+        const originalSymbol = originalAlgoSymbols[idx];
+        if (originalSymbol !== 'All') {
+          return { ...c, symbol: originalSymbol };
+        }
+        return c;
+      });
+      
     } else {
     // Coupled mode
     tradeSymbolsForDisplay = r.testSymbol || (TradeSettings.tradeSymbol.useAll ? 'All' : TradeSettings.tradeSymbol.list[0]);
@@ -786,22 +805,20 @@ if (hasAggregate && hasCoupled) {
     const hasCoupled = algoAggregateFlags.includes(false);
 
     if (hasAggregate && hasCoupled) {
-  // For aggregate algo combos, show algoSymbols list only if user input was 'All' or list
-  if (r.mode === 'coupled') {
-    r.combo = r.combo.map(c => {
-      if (algoAggregateFlags[0] && c.symbol === algo1SymbolRaw && algo1SymbolIsAllOrList) {
-        return {
-          ...c,
-          symbol: Array.isArray(algoSymbolsForDisplay) ? algoSymbolsForDisplay.join(',') : algoSymbolsForDisplay
-        };
+      // Use original symbol from algo definition
+      if (r.mode === 'coupled') {
+        r.combo = r.combo.map((c, idx) => {
+          const originalSymbol = originalAlgoSymbols[idx];
+          if (algoAggregateFlags[idx] && originalSymbol !== 'All') {
+            return { ...c, symbol: originalSymbol };
+          }
+          return c;
+        });
       }
-      return c;
-    });
-  }
-}
+    }
   }
 
-  console.log(`${i + 1}. ${formatComboAlgo(r.combo, r.stats, r.tp, r.sl, tradeSymbolsForDisplay, algoSymbolsForDisplay, r.tradeDir, r.mode)}`);
+  console.log(`${i + 1}. ${formatComboAlgo(r.combo, r.stats, r.tp, r.sl, tradeSymbolsForDisplay, algoSymbolsForDisplay, r.tradeDir, r.mode, originalAlgoSymbols)}`);
 });
   //=======================================
     const metadata = {
